@@ -2,7 +2,7 @@
 
 A detailed implementation plan has been generated in profile_review_plan.md (agy working file, not included). 
 
-Both files render valid GitHub Flavored Markdown and contain zero em dashes (`—`). The setup URLs and fields match GitHub's current UI. However, several claims and setup instructions require fixes to eliminate unbacked claims, invented details, and AI-slop phrasing:
+Both files render valid GitHub Flavored Markdown and contain zero em dashes (`U+2014`). The setup URLs and fields match GitHub's current UI. However, several claims and setup instructions require fixes to eliminate unbacked claims, invented details, and AI-slop phrasing:
 
 1. **[github-profile/README.md](../../../github-profile/README.md#L9)**:
    - **Issue:** Unbacked claims / buzzwords. Claims "Claude Agent SDK" and "approval steps before risky actions". [`quotameter`](../../README.md) has zero dependencies, uses no agent SDK or API calls, and has no risk-gated agent pipeline.

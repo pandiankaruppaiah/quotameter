@@ -204,7 +204,7 @@ Start with `quotameter doctor` (or `npx github:pandiankaruppaiah/quotameter doct
 
 ## Roadmap
 
-- **Browser extension** (next). Measures claude.ai use instead of estimating it: it notes when you send messages and which model you picked, and reads the percentages on claude.ai's usage page. It sends nothing anywhere except to quotameter on your own computer, and stays off until you turn it on.
+- **Sharper chat estimates** from more frequent readings.
 - **Antigravity**, as a second tool alongside Claude.
 - Learned per-token-type weights instead of list price, and tool costs weighted by result size.
 
