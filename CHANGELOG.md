@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 (2026-10-13)
+
+- Fix: the installed plugin failed to start ("Cannot use import statement outside a module"), so its hooks and commands did nothing. Claude Code installs only the plugin folder, and the setting that marks the code as ES modules lived outside it. The plugin folder now carries its own. A test runs a copy of the folder on its own to keep it that way.
+
 ## 0.1.0 (2026-10-13)
 
 First release.

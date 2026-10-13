@@ -359,3 +359,11 @@ test('whole-percent readings do not leak rounding into chat', async () => {
   const s = analyze({ now, data, config: { plan: 'pro', codeOnlyWindows: [] } });
   assert.ok(s.attribution.h5.chat < 0.5, `chat was ${s.attribution.h5.chat}, expected about 0`);
 });
+
+test('the plugin folder runs on its own, the way Claude Code installs it', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(home, 'installed-'));
+  fs.cpSync(path.join(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'plugins', 'quotameter'), dir, { recursive: true });
+  const out = execFileSync(process.execPath, [path.join(dir, 'bin', 'quotameter.js'), 'help'], { encoding: 'utf8' });
+  assert.match(out, /Usage: quotameter/);
+});
