@@ -107,7 +107,7 @@ test('forecast guards against a 0% window', async () => {
 });
 
 test('text fallback parser reads /usage output', () => {
-  const rows = parseUsageText('Current session: 17% used · resets Oct 13, 5:39pm (Australia/Sydney)\nCurrent week (all models): 3% used · resets Oct 15, 2:59am (Australia/Sydney)', new Date('2026-10-13T03:00:00Z'));
+  const rows = parseUsageText('Current session: 17% used · resets Oct 13, 5:39pm (UTC)\nCurrent week (all models): 3% used · resets Oct 15, 2:59am (UTC)', new Date('2026-10-13T03:00:00Z'));
   assert.deepEqual(rows.map((r) => [r.kind, r.percent]), [['session', 17], ['weekly_all', 3]]);
   assert.ok(rows[0].resetsAt);
 });
@@ -366,4 +366,63 @@ test('the plugin folder runs on its own, the way Claude Code installs it', async
   fs.cpSync(path.join(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'plugins', 'quotameter'), dir, { recursive: true });
   const out = execFileSync(process.execPath, [path.join(dir, 'bin', 'quotameter.js'), 'help'], { encoding: 'utf8' });
   assert.match(out, /Usage: quotameter/);
+});
+
+test('privacy: summaries for the model and for sharing drop titles, branches and names', async () => {
+  const { redact } = await import('../plugins/quotameter/lib/model/redact.js');
+  const summary = {
+    breakdown: { h5: {
+      projects: [{ name: 'acme-billing', branch: 'feat/client-x', pts: 3 }, { name: 'Chat and other devices', chat: true, pts: 1 }],
+      sessions: [{ title: 'Fix the SECRET-CLIENT invoice bug', pts: 2 }],
+    } },
+    insights: { branches: [{ project: 'acme-billing', branch: 'feat/client-x' }], sessionLength: { longestTitle: 'SECRET-CLIENT' } },
+    findings: ['acme-billing used most of the week'],
+  };
+  const model = JSON.stringify(redact(summary));
+  assert.ok(!model.includes('SECRET-CLIENT') && !model.includes('feat/client-x'), 'no titles or branches for the model');
+  assert.ok(model.includes('acme-billing'), 'project names stay for the model');
+  const shared = redact(summary, { share: true });
+  const text = JSON.stringify(shared);
+  assert.ok(!text.includes('acme-billing') && !text.includes('SECRET-CLIENT') && !text.includes('feat/client-x'));
+  assert.equal(shared.breakdown.h5.projects[0].name, 'Project 1');
+  assert.equal(shared.breakdown.h5.projects[1].name, 'Chat and other devices');
+  assert.equal(summary.breakdown.h5.sessions[0].title, 'Fix the SECRET-CLIENT invoice bug', 'the original is not changed');
+});
+
+test('privacy: redactPaths stops session titles being stored', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'titles-'));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, [
+    JSON.stringify({ type: 'ai-title', sessionId: 's9', aiTitle: 'SECRET-TITLE' }),
+    JSON.stringify(assistant({ id: 'm9', ts: '2027-01-01T00:00:00Z', session: 's9' })),
+  ].join(String.fromCharCode(10)) + String.fromCharCode(10));
+  const redacted = scanFile(file, 0, { redactPaths: true });
+  assert.ok(!JSON.stringify(redacted.sessions).includes('SECRET-TITLE'));
+  const plain = scanFile(file, 0, {});
+  assert.ok(JSON.stringify(plain.sessions).includes('SECRET-TITLE'));
+});
+
+test('privacy: the store is private to its owner on macOS and Linux', { skip: process.platform === 'win32' }, async () => {
+  const { storePath, append } = await import('../plugins/quotameter/lib/store.js');
+  const saved = process.env.QUOTAMETER_HOME;
+  process.env.QUOTAMETER_HOME = path.join(fs.mkdtempSync(path.join(home, 'perm-')), 'store');
+  try {
+    append('activity', [{ ts: '2027-01-01T00:00:00Z' }]);
+    assert.equal(fs.statSync(process.env.QUOTAMETER_HOME).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(storePath('activity.jsonl')).mode & 0o777, 0o600);
+  } finally {
+    process.env.QUOTAMETER_HOME = saved;
+  }
+});
+
+test('a lease is only released by the process that holds it', async () => {
+  const { tryLease, storePath } = await import('../plugins/quotameter/lib/store.js');
+  const first = tryLease('race', 1);
+  await new Promise((r) => setTimeout(r, 20));
+  const second = tryLease('race', 1); // the first one is stale now, so this takes over
+  assert.ok(first && second);
+  first(); // the slow first holder finishes late
+  assert.ok(fs.existsSync(storePath('race.lease')), 'the newer lease survives');
+  second();
+  assert.ok(!fs.existsSync(storePath('race.lease')));
 });

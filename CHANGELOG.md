@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2 (2026-10-14)
+
+Security and privacy review.
+
+- The data folder is now readable only by you on macOS and Linux (0700, files 0600); existing folders are tightened on the next run.
+- `redactPaths` also stops storing session titles, which Claude Code writes from your first prompt, and hides titles stored earlier.
+- `summary.json`, the only file the optional Haiku summary reads, no longer contains session titles or branch names.
+- New `quotameter report --share` writes a copy for screenshots with projects renamed and titles, branches and findings removed.
+- `--out` must be an .html file.
+- The poll lease is released only by the process that holds it.
+- CI runs with read-only permissions and actions pinned to commit SHAs.
+- Added SECURITY.md.
+
 ## 0.1.1 (2026-10-13)
 
 - Fix: the installed plugin failed to start ("Cannot use import statement outside a module"), so its hooks and commands did nothing. Claude Code installs only the plugin folder, and the setting that marks the code as ES modules lived outside it. The plugin folder now carries its own. A test runs a copy of the folder on its own to keep it that way.

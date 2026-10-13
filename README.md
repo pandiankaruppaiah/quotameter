@@ -160,14 +160,17 @@ quotameter keeps its own copy of your usage, so history outlives Claude Code's l
 - Nothing leaves your computer. quotameter makes no network requests of its own.
 - It never stores message text, thinking, tool inputs or tool results. A test checks this.
 - It never opens credentials, OAuth tokens, cookies or browser storage contents.
-- `quotameter config redactPaths true` stores project folders as a short hash and drops branch names.
+- `quotameter config redactPaths true` stores project folders as a short hash and drops branch names and session titles.
+- `quotameter report --share` writes a copy safe for screenshots: projects renamed, branches and session titles removed.
+- On macOS and Linux the data folder is readable only by you.
 
-Details in [PRIVACY.md](PRIVACY.md).
+Details in [PRIVACY.md](PRIVACY.md). To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Commands and settings
 
 ```
 quotameter report [--text | --json] [--no-open]   build the report and open it (default)
+quotameter report --share                          a copy without project names, branches or titles
 quotameter poll                                    read the 5-hour and weekly % now
 quotameter context                                 snapshot MCP and plugin overhead
 quotameter statusline [--wrap "<your command>"]    status line for Claude Code
@@ -181,7 +184,7 @@ quotameter doctor                                  check what quotameter can see
 | `plan` | `pro` | `pro`, `max5` or `max20`; used for plan value and the plan verdict |
 | `keepDays` | `90` | Days of raw data to keep before summarising (at least 35) |
 | `pollIntervalMin` | `10` | Minutes between free `/usage` readings taken by hooks |
-| `redactPaths` | `false` | Hash project folders and drop branch names |
+| `redactPaths` | `false` | Hash project folders, drop branch names and session titles |
 
 ## Troubleshooting
 

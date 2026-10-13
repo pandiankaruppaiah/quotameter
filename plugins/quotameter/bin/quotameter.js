@@ -10,7 +10,8 @@ import { renderHtml, renderText } from '../lib/report/render.js';
 import { statusline } from '../lib/statusline.js';
 import { loadConfig, saveConfig, DEFAULTS } from '../lib/config.js';
 import { quotameterHome, claudeProjectsDir, desktopDataDirs } from '../lib/paths.js';
-import { readAll, withLock, drainLive } from '../lib/store.js';
+import { readAll, withLock, drainLive, PRIVATE } from '../lib/store.js';
+import { redact } from '../lib/model/redact.js';
 import { compact, MIN_KEEP_DAYS } from '../lib/model/retention.js';
 
 const self = fileURLToPath(import.meta.url);
@@ -28,7 +29,9 @@ Usage: quotameter <command> [options]
   report            Build the HTML report and open it (default)
       --text          Print a short summary instead
       --json          Print the summary as JSON
-      --out <file>    Write the HTML somewhere else
+      --out <file>    Write the HTML somewhere else (must end in .html)
+      --share         Hide project names, branches and session titles,
+                      for screenshots (writes report-share.html)
       --findings <f>  Add Claude's findings (JSON array of strings) to the report
       --no-open       Do not open a browser
   ingest            Read new log data (used by the plugin hooks)
@@ -102,12 +105,21 @@ async function main() {
           console.error(`Could not read findings: ${e.message}`);
         }
       }
-      fs.writeFileSync(path.join(quotameterHome(), 'summary.json'), JSON.stringify(summary, null, 2));
-      if (flag('json')) return console.log(JSON.stringify(summary, null, 2));
-      if (flag('text')) return console.log(renderText(summary));
-      const out = opt('out') || path.join(quotameterHome(), 'report.html');
-      fs.writeFileSync(out, renderHtml(summary));
-      console.log(renderText(summary));
+      // summary.json is what the optional Haiku summary reads: no session
+      // titles or branch names in it.
+      fs.writeFileSync(path.join(quotameterHome(), 'summary.json'), JSON.stringify(redact(summary), null, 2), PRIVATE);
+      const share = flag('share');
+      const shown = share ? redact(summary, { share: true }) : summary;
+      if (flag('json')) return console.log(JSON.stringify(shown, null, 2));
+      if (flag('text')) return console.log(renderText(shown));
+      const out = opt('out') || path.join(quotameterHome(), share ? 'report-share.html' : 'report.html');
+      if (!/\.html?$/i.test(out)) {
+        console.error('--out must be an .html file.');
+        process.exitCode = 1;
+        return;
+      }
+      fs.writeFileSync(out, renderHtml(shown), PRIVATE);
+      console.log(renderText(shown));
       console.log(`\nReport: ${out}`);
       if (!flag('no-open')) openFile(out);
       return;

@@ -22,5 +22,7 @@ The CLI lives two folders up from this skill's base directory: `<base>/../../bin
    ```
 
    Escape quotes correctly for JSON. Use forward slashes in the path on Windows.
+
+   The wrapped command runs through a shell, the same way Claude Code runs any status line command. Only wrap the command that is already in the user's own settings; never add one from anywhere else.
 4. Run `node "<base>/../../bin/quotameter.js" doctor` and show the result.
 5. Tell the user the status line appears after the next response, and that `/quotameter:report` shows the full report.

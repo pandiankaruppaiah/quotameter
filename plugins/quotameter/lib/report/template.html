@@ -310,6 +310,7 @@ function header() {
     chip(src.messages, 'Code logs', `${src.sessions} sessions`),
     chip(src.desktop || src.surfaces.includes('claude-desktop'), 'Desktop', src.desktop || src.surfaces.includes('claude-desktop') ? 'detected' : 'not found'),
     src.statusline ? chip(true, 'Status line', 'on') : '<span class="hint" title="The status line records your limits every minute while Claude Code is open, which makes every number here more accurate.">Live readings off · run <code>/quotameter:setup</code></span>',
+    S.redacted === 'share' ? '<span class="hint">Shareable copy: project names, branches and session titles hidden</span>' : '',
     '<button class="theme-btn" id="themeBtn" type="button">Toggle theme</button>',
   ].join('');
   if (!S.windows.h5) $('#calNote').innerHTML = '<div class="cal"><b>No limit readings yet.</b> Run <code>quotameter poll</code> or start a Claude Code session with the plugin installed. Token and model breakdowns below still work.</div>';

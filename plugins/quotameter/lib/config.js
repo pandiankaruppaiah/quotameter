@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { storePath } from './store.js';
+import { storePath, PRIVATE } from './store.js';
 
 export const DEFAULTS = {
   // Minutes between /usage polls triggered by hooks, the status line or a report.
@@ -21,5 +21,5 @@ export function loadConfig() {
 }
 
 export function saveConfig(cfg) {
-  fs.writeFileSync(storePath('config.json'), JSON.stringify(cfg, null, 2) + '\n');
+  fs.writeFileSync(storePath('config.json'), JSON.stringify(cfg, null, 2) + '\n', PRIVATE);
 }

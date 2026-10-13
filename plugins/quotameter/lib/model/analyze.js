@@ -453,6 +453,13 @@ export function prepare(data, config) {
 
 export function analyze({ now = Date.now(), data = loadData(), config = loadConfig() } = {}) {
   const { messages, sessions, readings, overhead } = data;
+  // With redactPaths on, titles stored before it was turned on stay hidden too.
+  if (config.redactPaths) {
+    for (const s of sessions.values()) {
+      delete s.customTitle;
+      delete s.aiTitle;
+    }
+  }
   const archivedWindows = data.archivedWindows || [];
   const archivedWeeks = archivedWindows.filter((x) => x.kind === 'weekly_all');
   const { unitemised: unitemisedAll, kinds } = prepare(data, config);

@@ -263,3 +263,9 @@ agy reviewed the README, PRIVACY, CHANGELOG, CONTRIBUTING, manifests and the dra
 ### agy profile review 13 (2026-10-13), full text in `docs/reviews/agy-13-profile-review.md`
 
 The GitHub profile README now claims only what quotameter shows (Claude Code plugins, skills, hooks, subagents, MCP, cost engineering, tests and multi-model review) plus the role the owner gave (AI Tech Lead). Removed: Claude Agent SDK, Claude API, eval graders, "running AI in production", and the "any of my repositories" line. Points 6 to 9 referred to an earlier draft of the setup guide that had already been replaced.
+
+### agy security and privacy review 15 (2026-10-14), full text in `docs/reviews/agy-15-security.md`
+
+All 8 findings accepted. The store is now 0700 with 0600 files on macOS and Linux. `redactPaths` also drops session titles (Claude Code writes them from the first prompt) and hides ones stored earlier. `summary.json`, read by the optional Haiku summary, has no titles or branch names. `--out` must be .html. The poll lease is released only by its holder. CI has read-only permissions and SHA-pinned actions. The sample timezone in a comment and a test is now UTC. Added: `report --share` for screenshots (projects renamed; titles, branches and findings removed) and SECURITY.md. Confirmed fine: no dependencies, no message text stored, no credentials opened, report escaping and CSP, `claude` spawned without a shell, hooks detach at once.
+
+agy verification 16: 7 of 8 fixed; the `--wrap` shell is inherent (Claude Code runs status line commands through a shell) and is now documented in the setup skill. Follow-ups fixed: `--share` now also applies to `--json` and `--text`, the poll folder is created 0700, and lock owner files are 0600.

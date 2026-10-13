@@ -4,7 +4,7 @@
 
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { append, storePath } from './store.js';
+import { append, storePath, PRIVATE } from './store.js';
 
 function clock(epochSec) {
   return new Date(epochSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase();
@@ -16,7 +16,7 @@ function due(stamp, ms) {
   try {
     if (Date.now() - fs.statSync(p).mtimeMs < ms) return false;
   } catch {}
-  fs.writeFileSync(p, '');
+  fs.writeFileSync(p, '', PRIVATE);
   return true;
 }
 

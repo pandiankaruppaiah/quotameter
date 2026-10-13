@@ -21,15 +21,30 @@ export const FILES = {
   state: 'state.json',
 };
 
+// The store holds project names, branches and session titles, so only the
+// owner may read it. On macOS and Linux the folder is 0700 and files 0600;
+// a folder made by an older version is tightened once per process. Windows
+// keeps the user profile private already.
+export const PRIVATE = { mode: 0o600 };
+let secured = null;
+
 export function storePath(name) {
   const dir = quotameterHome();
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (secured !== dir) {
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(dir, 0o700);
+      } catch {}
+    }
+    secured = dir;
+  }
   return path.join(dir, name);
 }
 
 export function append(kind, rows) {
   if (!rows.length) return;
-  fs.appendFileSync(storePath(FILES[kind]), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  fs.appendFileSync(storePath(FILES[kind]), rows.map((r) => JSON.stringify(r)).join('\n') + '\n', PRIVATE);
 }
 
 export function readAll(kind) {
@@ -80,7 +95,7 @@ function renameRetry(from, to) {
 // Write to a temp file and rename it into place.
 function replaceAtomic(target, text) {
   const tmp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text);
+  fs.writeFileSync(tmp, text, PRIVATE);
   try {
     renameRetry(tmp, target);
   } catch (err) {
@@ -116,7 +131,7 @@ export function drainLive() {
   for (const name of fs.readdirSync(dir).filter((f) => f.startsWith(`${FILES.live}.drain-`)).sort()) {
     const drain = path.join(dir, name);
     const text = fs.readFileSync(drain, 'utf8');
-    fs.appendFileSync(storePath(FILES.livelog), text && !text.endsWith('\n') ? text + '\n' : text);
+    fs.appendFileSync(storePath(FILES.livelog), text && !text.endsWith('\n') ? text + '\n' : text, PRIVATE);
     fs.rmSync(drain, { force: true });
     n += text.split('\n').filter(Boolean).length;
   }
@@ -138,7 +153,7 @@ export async function withLock(fn, { waitMs = 10000, staleMs = 60000 } = {}) {
   for (;;) {
     try {
       fs.mkdirSync(lock);
-      fs.writeFileSync(owner, token);
+      fs.writeFileSync(owner, token, PRIVATE);
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
@@ -169,6 +184,7 @@ export async function withLock(fn, { waitMs = 10000, staleMs = 60000 } = {}) {
 // /usage poll). Returns a release function, or null if someone else holds it.
 export function tryLease(name, ttlMs) {
   const p = storePath(`${name}.lease`);
+  const token = `${process.pid}-${crypto.randomUUID()}`;
   try {
     fs.mkdirSync(p);
   } catch (err) {
@@ -183,7 +199,13 @@ export function tryLease(name, ttlMs) {
       return null;
     }
   }
-  return () => fs.rmSync(p, { recursive: true, force: true });
+  // Release only our own lease: a slow holder must not delete a newer one.
+  fs.writeFileSync(path.join(p, 'owner'), token, PRIVATE);
+  return () => {
+    try {
+      if (fs.readFileSync(path.join(p, 'owner'), 'utf8') === token) fs.rmSync(p, { recursive: true, force: true });
+    } catch {}
+  };
 }
 
 function isStale(lock, staleMs) {

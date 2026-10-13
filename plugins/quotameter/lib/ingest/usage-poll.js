@@ -48,8 +48,8 @@ const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7,
 
 // Fallback parser for the human-readable text, used only if the structured
 // record cannot be found. Example lines:
-//   Current session: 17% used · resets Oct 13, 5:39pm (Australia/Sydney)
-//   Current week (all models): 3% used · resets Oct 15, 2:59am (Australia/Sydney)
+//   Current session: 17% used · resets Oct 13, 5:39pm (UTC)
+//   Current week (all models): 3% used · resets Oct 15, 2:59am (UTC)
 export function parseUsageText(text, now = new Date()) {
   const rows = [];
   const re = /Current (session|week)([^:]*):\s*(\d+)%\s*used(?:[^\n]*?resets\s+([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm))?/gi;
@@ -106,7 +106,7 @@ function structuredFromLog(sessionId) {
 // error if it did not run as a local command (which would have spent quota).
 export async function runLocalCommand(name, { timeoutMs = 60000 } = {}) {
   const cwd = pollDir();
-  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true, mode: 0o700 }); // inside the private store
   const { cmd, windowsCmdFallback } = findClaude();
   const args = ['-p', `/${name}`, '--output-format', 'json'];
   let res = await run(cmd, args, { cwd, timeoutMs, useCmd: false });

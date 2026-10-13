@@ -197,9 +197,9 @@ export function scanFile(logPath, fromOffset = 0, opts = {}) {
         if (o) out.overhead.push(o);
       } else if (rec.type === 'cost-state' && rec.sessionId) {
         out.costs.push(costRow(rec, st.mtime.toISOString()));
-      } else if (rec.type === 'custom-title' && rec.sessionId) {
+      } else if (rec.type === 'custom-title' && rec.sessionId && !opts.redactPaths) {
         session(rec.sessionId).customTitle = rec.customTitle;
-      } else if (rec.type === 'ai-title' && rec.sessionId) {
+      } else if (rec.type === 'ai-title' && rec.sessionId && !opts.redactPaths) {
         session(rec.sessionId).aiTitle = rec.aiTitle;
       }
     }
