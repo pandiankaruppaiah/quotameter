@@ -1,0 +1,18 @@
+{
+  "name": "quotameter",
+  "version": "0.1.0",
+  "description": "See where your Claude Pro/Max quota goes across Claude Code, Desktop and claude.ai. Local only.",
+  "license": "MIT",
+  "author": {
+    "name": "Pandian Karuppaiah",
+    "url": "https://github.com/pandiankaruppaiah"
+  },
+  "keywords": [
+    "usage",
+    "quota",
+    "rate-limit",
+    "tokens"
+  ],
+  "homepage": "https://github.com/pandiankaruppaiah/quotameter",
+  "repository": "https://github.com/pandiankaruppaiah/quotameter"
+}

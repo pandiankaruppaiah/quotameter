@@ -1,0 +1,20 @@
+{
+  "name": "quotameter",
+  "owner": {
+    "name": "Pandian Karuppaiah",
+    "url": "https://github.com/pandiankaruppaiah"
+  },
+  "plugins": [
+    {
+      "name": "quotameter",
+      "source": "./plugins/quotameter",
+      "description": "See where your Claude Pro/Max quota goes across Claude Code, Desktop and claude.ai.",
+      "author": {
+        "name": "Pandian Karuppaiah",
+        "url": "https://github.com/pandiankaruppaiah"
+      },
+      "homepage": "https://github.com/pandiankaruppaiah/quotameter"
+    }
+  ],
+  "description": "quotameter: see where your Claude Pro/Max quota goes. Local only."
+}
