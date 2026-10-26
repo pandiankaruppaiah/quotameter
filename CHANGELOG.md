@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 (2026-10-27)
+
+Quota-aware sessions: what quotameter knows now reaches you, and the assistant, while you work. From the innovation brainstorm (docs/reviews/agy-21) and plan review (agy-22).
+
+- **Status line** shows this session's share of the 5-hour window and the context size: `5h 41% (this session 14%, resets 2:50am) | ctx 62% | wk 18%`.
+- **Quota-aware assistant:** from `adviseAt` (70%) Claude is told, once per 5% band, to prefer lighter models for routine steps, avoid re-reading large files and keep output short. Not shown to you; nothing is read from your prompt.
+- **Context nudge:** once per session past `ctxNudgeAt` (150K tokens), with what each turn now costs and a pointer to `/compact`.
+- **Session receipt and weekly digest** at session start, and the cost of rebuilding the cache when resuming after a pause.
+- **`quotameter precheck --min 25`** for scripts and CI: exit 0, 1 or 2.
+- **What fits before the reset:** quick tasks, typical sessions, heavy ones, and a note when less time is left than a usual session.
+- **Reset alarm:** a desktop notification when a limit that reached 95% resets (`resetAlarm`). No daemon; a small process waits and exits.
+- **Other computers:** `syncDir` names a folder you already sync; each install writes its usage there and reads the others', so Claude Code on your laptop is "Claude Code on other computers", not chat, and calibration sees the whole account. Nothing identifying crosses and nothing from another computer is written locally.
+- **Team digest, zero upload:** `quotameter team export` and `quotameter team report`.
+- **File guard:** a `PreToolUse` hook on Read asks before a file over `fileGuardKB` (512 KB) is read, with the size, token estimate and share of the window. It reads the file path only and stores nothing; PRIVACY.md and SECURITY.md say so.
+- Hooks run through a lean `bin/hook.js` (about 120 ms) so the file guard does not load the whole CLI on every read. The hooks' `k.json` carries the last calibration so no hook runs an analysis.
+
+
 ## 0.2.0 (2026-10-26)
 
 Readings without effort, answers in the terminal, and numbers you can trust. Driven by a product review (docs/reviews/agy-17) and by the author's own store: 13 days installed, 46 readings, because the status line was never set up.

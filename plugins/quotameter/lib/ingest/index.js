@@ -5,6 +5,7 @@ import { scanAll } from './logs.js';
 import { readDesktopHistory, readDesktopActivity } from './desktop.js';
 import { pollUsage, cleanupPollLogs } from './usage-poll.js';
 import { pollIsDue, notePollAttempt } from '../warn.js';
+import { exportSync } from '../sync.js';
 
 export function newestReadingTs() {
   let last = 0;
@@ -59,6 +60,11 @@ export async function ingest({ poll = 'auto', only } = {}) {
     append('activity', readDesktopActivity(state));
     drainLive();
     writeState(state);
+    if (cfg.syncDir) {
+      try {
+        exportSync(cfg, state);
+      } catch {}
+    }
     // Summarise and prune old rows at most once a day.
     const compacted = !state.lastCompact || Date.now() - state.lastCompact > 86400000 ? compact() : null;
     return {

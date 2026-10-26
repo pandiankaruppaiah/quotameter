@@ -138,6 +138,20 @@ export function drainLive() {
   return n;
 }
 
+// The calibration the last analysis found, for the status line and hooks,
+// which must not run an analysis themselves: { h5, wk, model, ts }.
+export function readK() {
+  try {
+    return JSON.parse(fs.readFileSync(storePath('k.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export function writeK(k) {
+  writeJsonAtomic(storePath('k.json'), { ...k, ts: new Date().toISOString() });
+}
+
 export function writeState(state) {
   writeJsonAtomic(storePath(FILES.state), state);
 }

@@ -4,8 +4,9 @@
 // limit is close. It never reads the prompt itself.
 
 import fs from 'node:fs';
-import { FILES, storePath, writeJsonAtomic, PRIVATE } from './store.js';
-import { dur, time, dayTime } from './report/format.js';
+import { FILES, storePath, writeJsonAtomic, readK, PRIVATE } from './store.js';
+import { dur, time, dayTime, fmt } from './report/format.js';
+import { priceFor } from './model/pricing.js';
 
 const KINDS = ['session', 'weekly_all'];
 const TAIL = 64 * 1024;
@@ -56,6 +57,48 @@ export function latestReadings() {
   return out;
 }
 
+// The newest status line row with a session total: { session, cost, ctx, model, ts }.
+export function latestTurn() {
+  let best = null;
+  for (const kind of ['livelog', 'live']) {
+    for (const r of tailRows(storePath(FILES[kind]))) {
+      if (!r.session || r.cost == null) continue;
+      if (!best || Date.parse(r.ts) > Date.parse(best.ts)) best = r;
+    }
+  }
+  return best;
+}
+
+// Once per session, when its context has grown past ctxNudgeAt tokens.
+// The prompt hook does not know which session asked (it reads nothing), so
+// it only trusts a row written in the last two minutes and says so in words.
+export function contextNudge(turn, { ctxNudgeAt = 150000 } = {}, k = null, warned = [], now = Date.now()) {
+  if (!(ctxNudgeAt > 0) || !turn?.ctx || turn.ctx < ctxNudgeAt) return null;
+  if (now - Date.parse(turn.ts) > 120000) return null;
+  const key = `ctx|${turn.session}`;
+  if (warned.includes(key)) return null;
+  // Every turn re-reads the whole context, nearly all of it from cache.
+  const price = priceFor(turn.model || k?.model || 'claude-opus-5-5');
+  const perTurn = price && k?.h5 ? (turn.ctx * price.cacheRead * k.h5) / 1e6 : null;
+  const cost = perTurn != null ? `, about ${perTurn >= 1 ? perTurn.toFixed(1) : perTurn.toFixed(2)}% of the 5-hour window per turn` : '';
+  return { key, message: `quotameter: the context of your most recently active session is ${fmt(turn.ctx)} tokens${cost}. /compact, or a fresh session for the next task, makes later turns cheaper.` };
+}
+
+// A window at 95% or past it: wake the user when it resets, once per window.
+export function alarmFor(latest, { resetAlarm = true } = {}, now = Date.now(), warned = []) {
+  if (!resetAlarm) return null;
+  for (const kind of KINDS) {
+    const r = latest[kind];
+    const resets = r?.resetsAt ? Date.parse(r.resetsAt) : NaN;
+    if (!r || !Number.isFinite(resets) || resets <= now) continue;
+    if (!(r.percent >= 95 || ['exceeded', 'critical'].includes(r.severity))) continue;
+    const key = `alarm|${kind}|${roundMinute(resets)}`;
+    if (warned.includes(key)) continue;
+    return { key, at: roundMinute(resets), kind: kind === 'session' ? '5-hour' : 'weekly' };
+  }
+  return null;
+}
+
 // When /usage was last tried, whether or not it worked. A poll that keeps
 // failing (no `claude` on PATH, an API-key account, offline) must back off
 // for pollIntervalMin like a successful one, not run on every prompt.
@@ -101,6 +144,26 @@ export function warningFor(latest, { warnAt = 80 } = {}, now = Date.now(), warne
   return { message: `quotameter: ${lines.join('; ')}.`, keys };
 }
 
+// Quiet guidance for the assistant itself, on every prompt once a window is
+// tight. Not shown to the user; the 80/95 warnings are.
+// Said once per 5% band of each window, not on every prompt: each injection
+// stays in the context for the rest of the session, so it must be rare.
+export function adviceFor(latest, { adviseAt = 70 } = {}, now = Date.now(), warned = []) {
+  if (!(adviseAt > 0)) return null;
+  const h = latest.session, w = latest.weekly_all;
+  const live = (r) => r?.resetsAt && Date.parse(r.resetsAt) > now;
+  const tight5 = live(h) && h.percent >= adviseAt;
+  const tightWk = live(w) && w.percent >= Math.min(100, adviseAt + 10);
+  if (!tight5 && !tightWk) return null;
+  const band = (r) => Math.floor(r.percent / 5) * 5;
+  const key = `advice|${tight5 ? `session|${roundMinute(Date.parse(h.resetsAt))}|${band(h)}` : ''}|${tightWk ? `weekly|${roundMinute(Date.parse(w.resetsAt))}|${band(w)}` : ''}`;
+  if (warned.includes(key)) return null;
+  const parts = [];
+  if (live(h)) parts.push(`5-hour limit at ${h.percent}% (resets in ${dur(Date.parse(h.resetsAt) - now)})`);
+  if (live(w)) parts.push(`weekly at ${w.percent}%`);
+  return { key, message: `quotameter: ${parts.join(', ')}. Quota is tight: prefer Sonnet or Haiku for routine steps and subagents, avoid re-reading large files, and keep output short.` };
+}
+
 const WARNED = 'warned.json';
 
 export function readWarned() {
@@ -113,7 +176,7 @@ export function readWarned() {
 }
 
 export function rememberWarned(keys) {
-  writeJsonAtomic(storePath(WARNED), { keys: [...readWarned(), ...keys].slice(-20) });
+  writeJsonAtomic(storePath(WARNED), { keys: [...readWarned(), ...keys].slice(-40) });
 }
 
 // What the prompt hook should do: poll if the newest reading is stale, and
@@ -121,7 +184,14 @@ export function rememberWarned(keys) {
 export function promptHook(cfg, now = Date.now()) {
   const latest = latestReadings();
   const poll = pollIsDue(cfg, now, latest.newestTs);
-  const w = warningFor(latest, cfg, now, readWarned());
-  if (w) rememberWarned(w.keys);
-  return { poll, message: w ? w.message : null };
+  const warned = readWarned();
+  const k = readK();
+  const w = warningFor(latest, cfg, now, warned);
+  const nudge = contextNudge(latestTurn(), cfg, k, warned, now);
+  const alarm = alarmFor(latest, cfg, now, warned);
+  const advice = adviceFor(latest, cfg, now, warned);
+  const keys = [...(w?.keys || []), ...(nudge ? [nudge.key] : []), ...(alarm ? [alarm.key] : []), ...(advice ? [advice.key] : [])];
+  if (keys.length) rememberWarned(keys);
+  const messages = [w?.message, nudge?.message].filter(Boolean);
+  return { poll, message: messages.length ? messages.join(' ') : null, advice: advice?.message || null, alarm, latest };
 }

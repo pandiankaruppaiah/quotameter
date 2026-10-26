@@ -100,7 +100,7 @@ export function attribute(w, costIn, k, messages) {
   const total = sum(inWin, (m) => m.adj) || 1;
   const bySurface = {};
   for (const m of inWin) {
-    const key = m.entrypoint === 'claude-desktop' ? 'desktop' : m.entrypoint === 'cli' ? 'cli' : 'headless';
+    const key = m.remote ? 'remote' : m.entrypoint === 'claude-desktop' ? 'desktop' : m.entrypoint === 'cli' ? 'cli' : 'headless';
     bySurface[key] = (bySurface[key] || 0) + code * (m.cost / total);
   }
   bySurface.unitemised = code * (sum(inWin, (m) => m.adj - m.cost) / total);

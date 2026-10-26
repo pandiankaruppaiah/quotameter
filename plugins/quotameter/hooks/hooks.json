@@ -1,16 +1,19 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook start", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/hook.js\" start", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook prompt", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/hook.js\" prompt", "timeout": 10 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/hook.js\" pretool", "timeout": 10 } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook stop", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/hook.js\" stop", "timeout": 10 } ] }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook end", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/hook.js\" end", "timeout": 10 } ] }
     ]
   }
 }

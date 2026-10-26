@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fmt, dur, time } from './format.js';
+import { fmt, dur, time, fitsText } from './format.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (f) => fs.readFileSync(path.join(here, f), 'utf8');
@@ -42,9 +42,11 @@ export function renderText(s) {
   lines.push(row('5-hour', s.windows.h5));
   lines.push(row('Weekly', s.windows.wk));
   const a = s.attribution.h5;
-  if (a) lines.push(`5-hour split (% of the limit): CLI ${a.cli}% · Desktop agent ${a.desktop}% · headless+other ${(a.headless + a.unitemised).toFixed(1)}% · chat and other devices ~${a.chat}% (estimated)`);
+  if (a) lines.push(`5-hour split (% of the limit): CLI ${a.cli}% · Desktop agent ${a.desktop}% · headless+other ${(a.headless + a.unitemised).toFixed(1)}%${a.remote ? ` · other computers ${a.remote}%` : ''} · chat and other devices ~${a.chat}% (estimated)`);
+  for (const m of (s.sources.machines || []).filter((x) => x.error)) lines.push(`Other computer ${m.name}: ${m.error}, so its usage counts as chat for now.`);
   const sc = s.insights?.sessionCost;
-  if (sc?.left) lines.push(`Room for about ${sc.left.typical} typical session(s) or ${sc.left.heavy} heavy one(s) before the 5-hour limit. A typical session uses ${sc.medianH5}% of it.`);
+  const fits = fitsText(s.windows.h5, sc, s.insights?.sessionLength);
+  if (fits) lines.push(`${fits} A typical session uses ${sc.medianH5}% of the 5-hour limit.`);
   const wt = s.insights?.weeklyTokens?.at(-1);
   if (wt) lines.push(`This week: ${fmt(wt.fresh)} fresh Code tokens (measured), ${fmt(wt.cacheRead)} cache reads, ~${fmt(wt.chat)} chat tokens (estimated).`);
   const top = (s.breakdown.h5?.models || []).filter((m) => !m.chat && !m.unitemised).slice(0, 3);

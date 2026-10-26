@@ -84,7 +84,7 @@ export function compact({ now = Date.now(), force = false } = {}) {
   const state = readState();
   if (!force && (state.compactedBefore || 0) >= cutoff) return { skipped: 'up to date', cutoff: new Date(cutoff).toISOString() };
 
-  const data = loadData(state);
+  const data = loadData(state, { remote: false });
   const { kinds } = prepare(data, cfg);
   const raw = data.messages.filter((m) => !m.archived);
 

@@ -587,3 +587,255 @@ test('the report page script compiles, and a report without readings explains it
     process.env.CLAUDE_CONFIG_DIR = saved.cfg;
   }
 });
+
+// ---------- 0.3.0 ----------
+
+const cliPath = path.join(pluginRoot, 'bin', 'quotameter.js');
+const hookPath = path.join(pluginRoot, 'bin', 'hook.js');
+// A store of its own for tests that write readings or sessions, so they
+// cannot hijack the current window of other tests.
+function ownStore(name) {
+  const saved = process.env.QUOTAMETER_HOME;
+  process.env.QUOTAMETER_HOME = path.join(fs.mkdtempSync(path.join(home, `${name}-`)), 'store');
+  return () => (process.env.QUOTAMETER_HOME = saved);
+}
+const msgRow = (o) => ({ id: o.id, ts: o.ts, session: o.session || 'r1', entrypoint: 'cli', cwd: o.cwd || '/home/dev/app', branch: 'main', model: o.model || 'claude-opus-5-5', agent: null, skill: null, tools: [], speed: 'standard', in: o.in || 10, out: o.out || 2000, cw5: o.cw5 || 20000, cw1h: 0, cr: o.cr || 100000, final: true, cost: o.cost || 0.5 });
+
+test('advice for the assistant: only when tight, once per 5% band, never a user message', async () => {
+  const { adviceFor } = await import('../plugins/quotameter/lib/warn.js');
+  const now = Date.parse('2026-10-20T10:00:00Z');
+  const latest = { session: { ts: iso(now), percent: 72, resetsAt: iso(now + H) }, weekly_all: { ts: iso(now), percent: 30, resetsAt: iso(now + 48 * H) } };
+  const a = adviceFor(latest, { adviseAt: 70 }, now, []);
+  assert.match(a.message, /5-hour limit at 72%/);
+  assert.match(a.message, /Sonnet or Haiku/);
+  assert.equal(adviceFor(latest, { adviseAt: 70 }, now, [a.key]), null, 'same band: said already');
+  latest.session.percent = 76;
+  assert.ok(adviceFor(latest, { adviseAt: 70 }, now, [a.key]), 'next band: said again');
+  latest.session.percent = 50;
+  assert.equal(adviceFor(latest, { adviseAt: 70 }, now, []), null, 'not tight');
+  latest.weekly_all.percent = 85;
+  assert.match(adviceFor(latest, { adviseAt: 70 }, now, []).message, /weekly at 85%/, 'the weekly limit counts from adviseAt + 10');
+  assert.equal(adviceFor(latest, { adviseAt: 0 }, now, []), null, 'adviseAt 0 turns it off');
+  // Through promptHook: advice without any message for the user, and remembered.
+  const { promptHook } = await import('../plugins/quotameter/lib/warn.js');
+  const { append } = await import('../plugins/quotameter/lib/store.js');
+  const restore = ownStore('advice');
+  try {
+    append('live', [{ ts: new Date().toISOString(), source: 'statusline', kind: 'session', group: 'session', percent: 72, resetsAt: iso(Date.now() + H) }]);
+    const r = promptHook({ adviseAt: 70, warnAt: 80, pollIntervalMin: 10 });
+    assert.match(r.advice, /72%/);
+    assert.equal(r.message, null, 'advice is not a user message');
+    assert.equal(promptHook({ adviseAt: 70, warnAt: 80, pollIntervalMin: 10 }).advice, null, 'same band, not again');
+  } finally {
+    restore();
+  }
+  latest.session.percent = 90;
+  latest.session.resetsAt = iso(now - 1);
+  latest.weekly_all.percent = 30;
+  assert.equal(adviceFor(latest, { adviseAt: 70 }, now, []), null, 'a window that reset is ignored');
+});
+
+test('status line shows the session share and context, with k and without', async () => {
+  const input = { rate_limits: { five_hour: { used_percentage: 42, resets_at: 1791873600 }, seven_day: { used_percentage: 7 } }, cost: { total_cost_usd: 1.25 }, context_window: { used_percentage: 61.7 } };
+  assert.match(statusText(input, null), /^5h 42% \(this session \$1\.25, resets .+\) \| ctx 62% \| wk 7%$/);
+  assert.match(statusText(input, { h5: 4 }), /this session 5\.0%/);
+  assert.match(statusText({ ...input, context_window: { used_percentage: null } }, null), /^5h 42% \(this session \$1\.25, resets .+\) \| wk 7%$/, 'no context before the first call');
+  assert.equal(statusText({ context_window: { used_percentage: 3 } }), 'ctx 3%');
+});
+
+test('context nudge: once per session, past the threshold, priced per turn', async () => {
+  const { contextNudge } = await import('../plugins/quotameter/lib/warn.js');
+  const turn = { session: 'sx', cost: 2, ctx: 162000, model: 'claude-opus-5-5', ts: iso(Date.now()) };
+  const n = contextNudge(turn, { ctxNudgeAt: 150000 }, { h5: 3 }, []);
+  assert.match(n.message, /162K tokens/);
+  assert.equal(contextNudge({ ...turn, ts: iso(Date.now() - 5 * 60000) }, { ctxNudgeAt: 150000 }, { h5: 3 }, []), null, 'a stale row could be another session');
+  assert.match(n.message, /% of the 5-hour window per turn/);
+  assert.equal(contextNudge(turn, { ctxNudgeAt: 150000 }, { h5: 3 }, [n.key]), null);
+  assert.equal(contextNudge({ ...turn, ctx: 90000 }, { ctxNudgeAt: 150000 }, null, []), null);
+  assert.equal(contextNudge(turn, { ctxNudgeAt: 0 }, null, []), null);
+});
+
+test('session receipt and weekly digest: once each, only at a real start, nothing after', async () => {
+  const restore = ownStore('digest');
+  try {
+    const { append, writeK } = await import('../plugins/quotameter/lib/store.js');
+    const { startMessages } = await import('../plugins/quotameter/lib/digest.js');
+    const now = Date.now();
+    const weekEnd = Math.round((now - 2 * H) / 60000) * 60000;
+    append('messages', [
+      msgRow({ id: 'd1', ts: iso(weekEnd - 3 * 24 * H), session: 'sd', cwd: '/home/dev/billing-app', cost: 3 }),
+      msgRow({ id: 'd2', ts: iso(weekEnd - 3 * 24 * H + H), session: 'sd', cwd: '/home/dev/billing-app', model: 'claude-haiku-5-5', cost: 0.1 }),
+    ]);
+    append('sessions', [{ session: 'sd', entrypoint: 'cli', start: iso(weekEnd - 3 * 24 * H), end: iso(weekEnd - 3 * 24 * H + 2 * H), cwd: '/home/dev/billing-app' }]);
+    append('costs', [{ session: 'sd', run: 'r', ts: iso(weekEnd - 3 * 24 * H + 2 * H), totalCost: 3.5, models: {} }]);
+    append('readings', [
+      { ts: iso(weekEnd - 4 * 24 * H), source: 'usage-poll', kind: 'weekly_all', group: 'weekly', percent: 20, resetsAt: iso(weekEnd) },
+      { ts: iso(weekEnd - 60000), source: 'usage-poll', kind: 'weekly_all', group: 'weekly', percent: 62, resetsAt: iso(weekEnd) },
+    ]);
+    writeK({ h5: 4, wk: 0.5, model: 'claude-opus-5-5' });
+    // The session that is starting is never its own receipt.
+    const first = startMessages({ source: 'startup', session_id: 'sd' }, now);
+    assert.equal(first.length, 1, first.join(' | '));
+    assert.match(first[0], /Last week you used 62% of the weekly limit over 1 session/);
+    assert.match(first[0], /mostly in billing-app/);
+    const lines = startMessages({ source: 'startup', session_id: 'other' }, now);
+    assert.equal(lines.length, 1, lines.join(' | '));
+    assert.match(lines[0], /Last session used 14% of the 5-hour limit/);
+    assert.match(lines[0], /2 h 0 m/);
+    assert.deepEqual(startMessages({ source: 'startup' }, now), [], 'said once');
+    assert.deepEqual(startMessages({ source: 'compact' }, now), [], 'a compaction is not a session start');
+    const resume = startMessages({ source: 'resume', prompt_cache_likely_expired: true, seconds_since_last_response: 900, estimated_cache_write_usd: 0.8 }, now);
+    assert.match(resume[0], /Resuming after 15 m rebuilds the prompt cache: about \$0\.80 at list price \(3\.2% of the 5-hour window\)/);
+  } finally {
+    restore();
+  }
+});
+
+test('precheck: exit 0 with room, 1 without, 2 with no reading', async () => {
+  const restore = ownStore('precheck');
+  try {
+    const { spawnSync } = await import('node:child_process');
+    const { append } = await import('../plugins/quotameter/lib/store.js');
+    const run = (...a) => spawnSync(process.execPath, [cliPath, 'precheck', '--no-poll', ...a], { encoding: 'utf8', env: process.env });
+    assert.equal(run().status, 2);
+    append('live', [{ ts: new Date().toISOString(), source: 'statusline', kind: 'session', group: 'session', percent: 60, resetsAt: iso(Date.now() + 2 * H) }]);
+    const ok = run('--min', '25');
+    assert.equal(ok.status, 0, ok.stdout);
+    assert.match(ok.stdout, /40% left/);
+    const no = run('--min', '50');
+    assert.equal(no.status, 1);
+    assert.match(no.stdout, /Aborted: 5-hour limit has 40% left, 50% required/);
+    assert.equal(run('--window', 'week').status, 2, 'no weekly reading yet');
+  } finally {
+    restore();
+  }
+});
+
+test('what fits before the reset reads naturally and never claims too much', async () => {
+  const { fitsText } = await import('../plugins/quotameter/lib/report/format.js');
+  const w = { resetsAt: iso(Date.now() + 42 * 60000) };
+  assert.equal(fitsText(w, { left: { quick: 3, typical: 1, heavy: 0 } }, { medianMs: 20 * 60000 }), 'Before the reset (in 42 m) there is room for 3 quick tasks or 1 typical session; a heavy one would not fit.');
+  assert.match(fitsText(w, { left: { quick: 1, typical: 0, heavy: 0 } }, null), /room for 1 quick task, not a typical session/);
+  assert.match(fitsText(w, { left: { quick: 0, typical: 0, heavy: 0 } }, null), /no room for even a quick task/);
+  assert.match(fitsText(w, { left: { quick: 40, typical: 5, heavy: 2 } }, null), /many quick tasks or 5 typical sessions, even 2 heavy ones/);
+  assert.match(fitsText(w, { left: { quick: 3, typical: 1, heavy: 0 } }, { medianMs: 90 * 60000 }), /and only 42 m, less than your usual session/);
+  assert.equal(fitsText(w, null, null), '', 'no calibration, no claim');
+  assert.match(fitsText(w, { left: { quick: null, typical: 1, heavy: 0 } }, null), /room for 1 typical session; a heavy one would not fit/, 'quick unknown when a quarter of sessions cost nothing');
+  assert.equal(fitsText({ resetsAt: iso(Date.now() - 1) }, { left: { quick: 3, typical: 1, heavy: 0 } }, null), '');
+});
+
+test('reset alarm: fires at the reset, stays quiet when stale or far away', async () => {
+  const { alarm, alarmFor } = await import('../plugins/quotameter/lib/notify.js').then(async (n) => ({ ...n, ...(await import('../plugins/quotameter/lib/warn.js')) }));
+  const fired = [];
+  const notifyFn = (t, b) => fired.push(b);
+  let t = 1000;
+  const clock = () => t;
+  const p = alarm(1600, { now: 1000, notifyFn, step: 100, clock });
+  await new Promise((r) => setTimeout(r, 120));
+  t = 1700; // the reset passed while we slept
+  assert.equal(await p, true);
+  assert.match(fired[0], /5-hour limit has reset/);
+  assert.equal(await alarm(1000, { now: 1000, notifyFn, clock: () => 1000 + 31 * 60000 }), false, 'woke up too late: silent');
+  assert.equal(await alarm(Date.now() + 9 * 24 * H, { notifyFn }), false, 'too far away');
+  const now = Date.now();
+  const latest = { session: { ts: iso(now), percent: 96, resetsAt: iso(now + H) } };
+  const a = alarmFor(latest, { resetAlarm: true }, now, []);
+  assert.equal(a.kind, '5-hour');
+  assert.equal(alarmFor(latest, { resetAlarm: true }, now, [a.key]), null, 'one alarm per window');
+  assert.equal(alarmFor(latest, { resetAlarm: false }, now, []), null);
+  assert.equal(alarmFor({ session: { ...latest.session, percent: 80 } }, { resetAlarm: true }, now, []), null);
+});
+
+test('other computers: their Code usage is Code, not chat, and calibration stays right', async () => {
+  const { append, readState } = await import('../plugins/quotameter/lib/store.js');
+  const { saveConfig, loadConfig } = await import('../plugins/quotameter/lib/config.js');
+  const { exportSync, importSync, dedupeReadings } = await import('../plugins/quotameter/lib/sync.js');
+  const syncDir = fs.mkdtempSync(path.join(home, 'sync-'));
+  const now = Date.parse('2027-03-01T03:00:00Z');
+  const reset = now + 2 * H, start = reset - 5 * H;
+  // Machine A (the laptop): Code work between start+1h and start+2h.
+  const restoreA = ownStore('laptop');
+  saveConfig({ ...loadConfig(), syncDir, machineName: 'Laptop' });
+  for (let i = 0; i < 10; i++) append('messages', [msgRow({ id: `l${i}`, ts: iso(start + H + i * 6 * 60000), session: 'ls', cwd: '/home/dev/secret-client', cost: 0.5 })]);
+  append('costs', [{ session: 'ls', run: 'r', ts: iso(start + 2 * H), totalCost: 5, models: {} }]);
+  append('readings', [{ ts: iso(start + 1.5 * H), source: 'usage-poll', kind: 'session', group: 'session', percent: 6, resetsAt: iso(reset) }]);
+  const ex = exportSync(loadConfig(), readState(), now);
+  assert.equal(ex.rows, 10);
+  const text = fs.readFileSync(ex.file, 'utf8');
+  assert.ok(!text.includes('secret-client') && !text.includes('"ls"'), 'no folder names or session ids cross');
+  restoreA();
+  // Machine B (this one): no Code work, but the limit rose 0 -> 10 while A worked.
+  const restoreB = ownStore('desktop');
+  try {
+    saveConfig({ ...loadConfig(), syncDir, machineName: 'Desktop' });
+    append('readings', [
+      { ts: iso(start + 0.5 * H), source: 'usage-poll', kind: 'session', group: 'session', percent: 0, resetsAt: iso(reset) },
+      { ts: iso(start + 2.5 * H), source: 'usage-poll', kind: 'session', group: 'session', percent: 10, resetsAt: iso(reset) },
+      { ts: iso(start + 2.5 * H), source: 'usage-poll', kind: 'weekly_all', group: 'weekly', percent: 3, resetsAt: iso(now + 3 * 24 * H) },
+    ]);
+    const imp = importSync(loadConfig(), now);
+    assert.equal(imp.messages.length, 10);
+    assert.equal(imp.machines[0].name, 'Laptop');
+    assert.equal(dedupeReadings([...imp.readings, ...imp.readings]).length, 1);
+    const s = analyze({ now, config: loadConfig() });
+    assert.ok(s.attribution.h5.remote > 9, `remote share was ${s.attribution.h5.remote}`);
+    assert.ok(s.attribution.h5.chat < 0.5, `chat was ${s.attribution.h5.chat}`);
+    assert.ok(s.breakdown.h5.projects.some((p) => p.name === 'Other computer: Laptop'));
+    assert.equal(s.sources.machines[0].name, 'Laptop');
+    // A half-synced file and rows from the future are skipped.
+    fs.writeFileSync(path.join(syncDir, 'quotameter-deadbeef.json'), '{"schema":1,"machineId":"deadbeef","rows":[{"id":"x","ts":"2027-03-');
+    fs.writeFileSync(path.join(syncDir, 'quotameter-cafe0001.json'), JSON.stringify({ schema: 1, machineId: 'cafe0001', name: 'Clock', rows: [{ id: 'f', ts: iso(now + H), cost: 1 }], costs: [], readings: [] }));
+    assert.equal(importSync(loadConfig(), now).messages.length, 10);
+  } finally {
+    restoreB();
+  }
+});
+
+test('team digest carries numbers only, and the report reads several of them', async () => {
+  const { teamDigest, teamReport, readDigests } = await import('../plugins/quotameter/lib/team.js');
+  const s = analyze({ now: Date.parse('2026-10-20T03:00:00Z'), config: { plan: 'max5', codeOnlyWindows: [] } });
+  const d = teamDigest(s, { label: 'Pat <x>' });
+  assert.equal(d.label, 'Pat x');
+  const text = JSON.stringify(d);
+  for (const bad of ['/p/', 'invoice-app', 'feat/', 'SECRET', '"session"', 'title', 'cwd']) assert.ok(!text.includes(bad), `digest contains ${bad}`);
+  assert.equal(d.schema, 1);
+  const dir = fs.mkdtempSync(path.join(home, 'team-'));
+  fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify(d));
+  fs.writeFileSync(path.join(dir, 'b.json'), JSON.stringify({ ...d, label: 'Sam', listCost: 40, idleMcpTokens: 3000, idleMcpServers: 2 }));
+  fs.writeFileSync(path.join(dir, 'bad.json'), '{"schema":9}');
+  const out = teamReport(readDigests([path.join(dir, 'a.json'), path.join(dir, 'b.json'), path.join(dir, 'bad.json')]));
+  assert.match(out, /Skipped .*bad\.json: not a quotameter team digest/);
+  assert.match(out, /\| Pat x/);
+  assert.match(out, /\| Sam/);
+  assert.match(out, /\| All/);
+  assert.match(out, /- Sam: .*3\.0K tokens of unused MCP servers/);
+});
+
+test('file guard: asks before a big Read, lets everything else through, stores nothing', async () => {
+  const { guardDecision } = await import('../plugins/quotameter/lib/guard.js');
+  const { execFileSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(home, 'guard-'));
+  const big = path.join(dir, 'bundle.js');
+  fs.writeFileSync(big, 'x'.repeat(700 * 1024));
+  const small = path.join(dir, 'small.js');
+  fs.writeFileSync(small, 'ok');
+  const k = { h5: 4, model: 'claude-opus-5-5' };
+  const d = guardDecision({ tool_name: 'Read', tool_input: { file_path: big } }, { fileGuardKB: 512 }, k);
+  assert.equal(d.hookSpecificOutput.permissionDecision, 'ask');
+  assert.match(d.hookSpecificOutput.permissionDecisionReason, /bundle\.js is 0\.7 MB, about 179K tokens, roughly 2\.9% of your 5-hour window/);
+  assert.equal(guardDecision({ tool_name: 'Read', tool_input: { file_path: small } }, { fileGuardKB: 512 }, k), null);
+  assert.equal(guardDecision({ tool_name: 'Read', tool_input: { file_path: path.join(dir, 'missing') } }, { fileGuardKB: 512 }, k), null);
+  assert.equal(guardDecision({ tool_name: 'Grep', tool_input: { file_path: big } }, { fileGuardKB: 512 }, k), null);
+  assert.equal(guardDecision({ tool_name: 'Read', tool_input: { file_path: big } }, { fileGuardKB: 0 }, k), null, 'off');
+  assert.ok(guardDecision({ tool_name: 'Read', tool_input: { file_path: 'bundle.js' }, cwd: dir }, { fileGuardKB: 512 }, null), 'relative to the session folder');
+  // Through the hook entry point, and nothing about the file lands in the store.
+  const restore = ownStore('guardhook');
+  try {
+    const out = execFileSync(process.execPath, [hookPath, 'pretool'], { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: big } }), encoding: 'utf8', env: process.env });
+    assert.match(out, /"permissionDecision":"ask"/);
+    const stored = fs.readdirSync(process.env.QUOTAMETER_HOME).map((f) => fs.readFileSync(path.join(process.env.QUOTAMETER_HOME, f), 'utf8')).join('');
+    assert.ok(!stored.includes('bundle.js'));
+  } finally {
+    restore();
+  }
+});

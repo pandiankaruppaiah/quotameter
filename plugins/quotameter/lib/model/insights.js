@@ -127,11 +127,14 @@ function sessionCost(list, k, windows) {
   const costs = ses.map((s) => s.adj);
   const med = percentile(costs, 0.5);
   const heavy = percentile(costs, 0.9);
+  const quick = percentile(costs, 0.25); // a quick task: the lighter quarter of sessions
   const toks = percentile(ses.map((s) => s.tokens), 0.5);
   const res = {
     n: ses.length,
     medianCost: round(med, 2),
     heavyCost: round(heavy, 2),
+    quickCost: round(quick, 2),
+    quickH5: k.h5 ? round(quick * k.h5, 1) : null,
     medianTokens: Math.round(toks),
     medianH5: k.h5 ? round(med * k.h5, 1) : null,
     heavyH5: k.h5 ? round(heavy * k.h5, 1) : null,
@@ -142,7 +145,8 @@ function sessionCost(list, k, windows) {
   const h5 = windows.h5;
   if (h5 && k.h5 && med > 0) {
     const room = Math.max(0, 100 - h5.pct);
-    res.left = { typical: Math.floor(room / (med * k.h5)), heavy: Math.floor(room / (heavy * k.h5)), room };
+    // A quarter of sessions can cost nothing (a poll, an aborted start): then "quick" is unknown.
+    res.left = { quick: quick > 0 ? Math.floor(room / (quick * k.h5)) : null, typical: Math.floor(room / (med * k.h5)), heavy: heavy > 0 ? Math.floor(room / (heavy * k.h5)) : 0, room };
   }
   const wk = windows.wk;
   if (wk && k.wk && med > 0) res.leftWeek = { typical: Math.floor(Math.max(0, 100 - wk.pct) / (med * k.wk)), heavy: Math.floor(Math.max(0, 100 - wk.pct) / (heavy * k.wk)) };

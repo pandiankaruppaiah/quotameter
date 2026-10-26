@@ -5,6 +5,7 @@ import { sum, tokensOf, freshOf, round } from './util.js';
 import { prettyModel } from './models.js';
 
 function whereOf(m) {
+  if (m.remote) return `Other computer: ${m.remote}`;
   if (m.agent) return 'Subagents';
   if (m.entrypoint === 'claude-desktop') return 'Main · Desktop agent';
   if (m.entrypoint === 'cli') return 'Main · CLI';
@@ -47,7 +48,7 @@ export function breakdown(msgs, { codePts, chatPts, chatTokens, sessions, k, uni
     const proj = m.cwd ? folderName(m.cwd) : 'unknown';
     add(projects, proj, { name: proj, branches: new Set(), sources: new Set() }, m, (g) => {
       if (m.branch && m.branch !== 'HEAD') g.branches.add(m.branch);
-      g.sources.add(sourceOf(m.entrypoint));
+      g.sources.add(m.remote ? 'Other computer' : sourceOf(m.entrypoint));
     });
     if (!m.archived) add(sess, m.session, { session: m.session, models: new Set(), agents: new Set() }, m, (g) => {
       if (m.agent) g.agents.add(m.agent.id || m.agent.type);

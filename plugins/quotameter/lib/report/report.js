@@ -34,6 +34,7 @@ function header() {
     chip(src.usagePoll, '/usage', src.usagePoll ? 'read ' + dayTime(src.usagePoll) : 'no readings yet'),
     chip(src.messages, 'Code logs', `${src.sessions} sessions`),
     chip(src.desktop || src.surfaces.includes('claude-desktop'), 'Desktop', src.desktop || src.surfaces.includes('claude-desktop') ? 'detected' : 'not found'),
+    src.machines?.length ? chip(true, 'Other computers', src.machines.map((m) => m.name).join(', ')) : '',
     src.statusline ? chip(true, 'Status line', 'on') : '<span class="hint" title="The status line records your limits every minute while Claude Code is open, which makes every number here more accurate.">Live readings off · run <code>/quotameter:setup</code></span>',
     S.redacted === 'share' ? '<span class="hint">Shareable copy: project names, branches and session titles hidden</span>' : '',
     '<button class="theme-btn" id="themeBtn" type="button">Toggle theme</button>',
@@ -81,7 +82,7 @@ function meters() {
   const pace = (w) => w.hitsBeforeReset
     ? `At this pace you reach the limit at <b>${dayTime(w.hitAt)}</b>, ${dur(Date.parse(w.resetsAt) - Date.parse(w.hitAt))} before it resets.`
     : `At this pace you end the window ${projRange(w).includes(' to ') ? 'between' : 'around'} <b>${projRange(w).replace(' to ', '</b> and <b>')}</b>, under the limit.`;
-  const h5Lead = h5 ? pace(h5) + (sc?.left ? ` Room for about <b>${sc.left.typical}</b> more session${sc.left.typical === 1 ? '' : 's'} like your usual ones.` : '') : '';
+  const h5Lead = h5 ? pace(h5) + ' ' + fitsText(h5, sc, S.insights.sessionLength) : '';
   const wkLead = wk ? pace(wk) + (sc?.leftWeek ? ` About ${sc.leftWeek.typical} typical sessions left this week.` : '') : '';
   $('#meters').innerHTML = card('5-hour limit', h5, h5Lead) + card('Weekly limit · all models', wk, wkLead);
 }
@@ -117,11 +118,11 @@ function lineChart() {
 
 // ---------- attribution ----------
 function stacks() {
-  const parts = [['cli', 'Claude Code (CLI)', '--series-1'], ['desktop', 'Desktop agent', '--series-2'], ['other', 'Headless and not itemised', '--series-4'], ['chat', 'Chat and other devices (estimated)', '--series-3']];
+  const parts = [['cli', 'Claude Code (CLI)', '--series-1'], ['desktop', 'Desktop agent', '--series-2'], ['other', 'Headless and not itemised', '--series-4'], ['remote', 'Claude Code on other computers', '--series-5'], ['chat', 'Chat and other devices (estimated)', '--series-3']];
   const rows = [['5-hour', S.attribution.h5], ['Weekly', S.attribution.wk]].filter(([, a]) => a);
   if (!rows.length) { $('#stacks').innerHTML = '<div class="empty">Needs at least one limit reading.</div>'; return; }
   $('#stacks').innerHTML = rows.map(([label, a]) => {
-    const vals = { cli: a.cli, desktop: a.desktop, other: a.headless + a.unitemised, chat: a.chat };
+    const vals = { cli: a.cli, desktop: a.desktop, other: a.headless + a.unitemised, remote: a.remote || 0, chat: a.chat };
     const segs = parts.filter(([k]) => vals[k] > 0.005).map(([k, name, c]) => `<div data-k="${k}" data-name="${name}" data-v="${vals[k]}" data-t="${a.total}" style="width:${(vals[k] / Math.max(a.total, 0.01)) * 100}%;background:var(${c})"></div>`).join('');
     return `<div class="stack-row"><div><b>${label}</b></div><div class="stack">${segs}</div><div class="n" style="text-align:right;font-weight:600">${a.total}%</div></div>`;
   }).join('');

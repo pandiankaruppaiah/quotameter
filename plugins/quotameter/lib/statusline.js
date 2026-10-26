@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { append, storePath, PRIVATE } from './store.js';
+import { append, storePath, readK, PRIVATE } from './store.js';
 import { loadConfig } from './config.js';
 import { claudeConfigDir } from './paths.js';
 
@@ -23,8 +23,18 @@ function due(stamp, ms) {
   return true;
 }
 
-// Readings at most once a minute; the session's running cost every 15 seconds,
-// so a short session still leaves a total behind.
+// Context tokens as Claude Code counts them: input only, cache included.
+function contextTokens(input) {
+  const c = input.context_window;
+  if (!c) return null;
+  if (typeof c.total_input_tokens === 'number' && c.total_input_tokens > 0) return c.total_input_tokens;
+  const u = c.current_usage;
+  if (u) return (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+  return null;
+}
+
+// Readings at most once a minute; the session's running cost and context
+// every 15 seconds, so a short session still leaves a total behind.
 function record(input) {
   const rl = input.rate_limits || {};
   const now = new Date().toISOString();
@@ -38,16 +48,26 @@ function record(input) {
   if (rows.length && due('live-reading.stamp', 60000)) append('live', rows);
   const cost = input.cost?.total_cost_usd;
   if (input.session_id && typeof cost === 'number' && due('live-cost.stamp', 15000)) {
-    append('live', [{ ts: now, source: 'statusline', session: input.session_id, cost }]);
+    append('live', [{ ts: now, source: 'statusline', session: input.session_id, cost, ctx: contextTokens(input), model: input.model?.id || null }]);
   }
 }
 
-export function statusText(input) {
+// `5h 41% (this session 14%, resets 2:50am) | ctx 62% | wk 18%`. The session
+// share uses the 5-hour k the last analysis wrote; before that, dollars.
+export function statusText(input, k = null) {
+  input = input && typeof input === 'object' ? input : {};
   const rl = input.rate_limits || {};
   const parts = [];
   const h = rl.five_hour;
   const w = rl.seven_day;
-  if (typeof h?.used_percentage === 'number') parts.push(`5h ${Math.round(h.used_percentage)}%${h.resets_at ? ` (resets ${clock(h.resets_at)})` : ''}`);
+  const cost = input.cost?.total_cost_usd;
+  const session = typeof cost === 'number' && cost > 0 ? (k?.h5 ? `this session ${(cost * k.h5).toFixed(cost * k.h5 >= 10 ? 0 : 1)}%` : `this session $${cost.toFixed(2)}`) : '';
+  if (typeof h?.used_percentage === 'number') {
+    const inside = [session, h.resets_at ? `resets ${clock(h.resets_at)}` : ''].filter(Boolean).join(', ');
+    parts.push(`5h ${Math.round(h.used_percentage)}%${inside ? ` (${inside})` : ''}`);
+  }
+  const ctx = input.context_window?.used_percentage;
+  if (typeof ctx === 'number') parts.push(`ctx ${Math.round(ctx)}%`);
   if (typeof w?.used_percentage === 'number') parts.push(`wk ${Math.round(w.used_percentage)}%`);
   // Before the first response Claude Code sends no limits yet.
   return parts.length ? parts.join(' | ') : '5h -- | wk --';
@@ -104,11 +124,16 @@ export async function statusline({ wrap } = {}) {
   let input = {};
   try {
     input = JSON.parse(raw);
+    if (!input || typeof input !== 'object') input = {};
   } catch {}
   try {
     record(input);
   } catch {}
-  const ours = statusText(input);
+  let k = null;
+  try {
+    k = readK();
+  } catch {}
+  const ours = statusText(input, k);
   // `quotameter setup` keeps a wrapped command in config.json rather than on
   // the command line, so nothing needs quoting inside settings.json.
   let wrapped = wrap;

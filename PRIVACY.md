@@ -9,7 +9,10 @@ quotameter runs entirely on your computer.
 - The output of `claude -p /usage` and `claude -p /context`, which Claude Code runs locally.
 - Claude Desktop's `plan-usage-history.json`, and the last-modified time (not the contents) of Desktop's web storage folders, used as a sign that the Chat tab was in use.
 - The JSON Claude Code sends to the status line, if you enable it: the two percentages, reset times and the session's running cost.
-- The prompt hook runs when you send a prompt. It does not read the prompt (it never reads its input at all); it only checks the newest stored reading and, when a limit is close, prints one line for Claude Code to show you.
+- The prompt hook runs when you send a prompt. It does not read the prompt (it never reads its input at all); it checks the newest stored reading and, when a limit is close, prints one line for Claude Code to show you, and from `adviseAt` a short note for Claude itself.
+- The session start hook reads the event type Claude Code sends (startup, resume, clear, compact) and, on a resume, whether the prompt cache has likely expired. It stores none of it.
+- The file guard runs before Claude reads a file. It reads one thing from the tool call, the file's path, to check the file's size, and stores nothing. `fileGuardKB 0` turns it off.
+- The status line input also carries this session's running cost, context size and model id; those are kept (not the context itself).
 
 ## What it never stores
 
@@ -37,6 +40,8 @@ Raw rows are kept for 90 days (`keepDays`). Older days are summarised and the ra
 
 - `quotameter config redactPaths true` stores project folders as a short hash and stops storing branch names and session titles. Titles stored before you turned it on are hidden in the report as well.
 - `quotameter setup` edits `~/.claude/settings.json` to add the status line. Before it replaces a status line that is not its own it copies the file to `settings.json.quotameter.bak`, and `setup --remove` puts back what was there.
+- `syncDir`, if you set it, is a folder of yours that you sync between your own computers. quotameter writes one file there per computer: readings, and per response the time, model, surface, agent flag, token counts and list cost, with session ids replaced by a short hash. No folder, branch, title or hostname (only the `machineName` you chose, or the hostname if you did not) is in it. Files from other computers are read when a report is built and never copied into the local store.
+- `quotameter team export` writes a file of aggregate numbers (30-day totals and ratios) with a label you choose. It holds no paths, titles, branches, hostnames or session ids. Sharing it is your decision; quotameter does not send it anywhere.
 - Delete `~/.quotameter` to remove all data.
 
 ## Optional AI summary

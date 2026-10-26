@@ -11,11 +11,15 @@ import { renderHtml, renderText } from '../lib/report/render.js';
 import { statusline } from '../lib/statusline.js';
 import { loadConfig, saveConfig, DEFAULTS } from '../lib/config.js';
 import { quotameterHome, claudeProjectsDir, desktopDataDirs } from '../lib/paths.js';
-import { readAll, withLock, drainLive, PRIVATE } from '../lib/store.js';
+import { readAll, withLock, drainLive, writeK, readK, PRIVATE } from '../lib/store.js';
 import { redact } from '../lib/model/redact.js';
 import { compact, MIN_KEEP_DAYS } from '../lib/model/retention.js';
 import { setup, describe, refreshLauncher } from '../lib/setup.js';
 import { promptHook, latestReadings } from '../lib/warn.js';
+import { startMessages } from '../lib/digest.js';
+import { guardDecision } from '../lib/guard.js';
+import { alarm } from '../lib/notify.js';
+import { teamDigest, readDigests, teamReport } from '../lib/team.js';
 
 const self = fileURLToPath(import.meta.url);
 const pluginRoot = path.resolve(path.dirname(self), '..');
@@ -44,14 +48,21 @@ Usage: quotameter <command> [options]
       --dry-run       Show what would change and stop
       --remove        Take it out again and restore what was there
   poll              Read the 5-hour and weekly % now (free, no model call)
+  team export       Write a digest of aggregate numbers, nothing identifying, for a team lead
+      --label <name>  How this digest is labelled (default member-<hash>)
+  team report <f..> Table from several digests, plus a waste line each
+  precheck          Exit 0 when enough of the limit is left, for scripts and CI
+      --min <pct>     Percent that must be left (default 25)
+      --window week   Check the weekly limit instead of the 5-hour one
   mark code-only    Say this 5-hour window had no chat, to sharpen the chat estimate
       --week          The weekly window instead
       --undo          Remove the mark
   context           Snapshot per-session overhead from /context (free)
   compact           Summarise and remove raw rows older than keepDays now
-  config [key val]  Show or change settings: plan (pro|max5|max20),
-                    warnAt (percent, 0 to turn warnings off), pollIntervalMin,
-                    redactPaths (true|false), keepDays (at least ${MIN_KEEP_DAYS})
+  config [key val]  Show or change settings: plan (pro|max5|max20), warnAt,
+                    adviseAt, ctxNudgeAt, resetAlarm, fileGuardKB, syncDir,
+                    machineName, teamLabel, pollIntervalMin, redactPaths,
+                    keepDays (at least ${MIN_KEEP_DAYS})
   doctor            Check what quotameter can see on this machine
   ingest            Read new log data (used by the plugin hooks)
   statusline        Status line command (installed for you by setup)
@@ -106,7 +117,24 @@ async function buildSummary({ poll, context = false } = {}) {
     }
   }
   const pollError = r?.poll && !['ok', 'skipped'].includes(r.poll) ? r.poll : null;
-  return analyze({ pollError });
+  const summary = analyze({ pollError });
+  // The status line and hooks read k.json instead of running an analysis.
+  const top = (summary.breakdown.h5?.models || []).find((m) => !m.chat && !m.unitemised);
+  try {
+    writeK({ h5: summary.calibration.h5.k, wk: summary.calibration.wk.k, model: top?.model || readK()?.model || null });
+  } catch {}
+  return summary;
+}
+
+// Hook stdin, parsed. Only the session start hook (event type, resume cache
+// fields) and the file guard (the Read call's file path) look at it; the
+// prompt hook never does. Nothing read here is stored.
+function hookInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
 async function main() {
@@ -120,9 +148,29 @@ async function main() {
       if (args[0] === 'prompt') {
         const r = promptHook(loadConfig());
         if (r.poll) detached('ingest', '--quiet');
-        // Claude Code shows systemMessage to the user; additionalContext lets
-        // the assistant know too, so it can suggest a lighter model itself.
-        if (r.message) console.log(JSON.stringify({ systemMessage: r.message, hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: r.message } }));
+        if (r.alarm) detached('alarm', new Date(r.alarm.at).toISOString(), '--window', r.alarm.kind);
+        // systemMessage is shown to the user; additionalContext goes to the
+        // assistant only, so it can go easy on quota by itself.
+        const context = [r.message, r.advice].filter(Boolean).join(' ');
+        const out = {};
+        if (r.message) out.systemMessage = r.message;
+        if (context) out.hookSpecificOutput = { hookEventName: 'UserPromptSubmit', additionalContext: context };
+        if (Object.keys(out).length) console.log(JSON.stringify(out));
+        return;
+      }
+      if (args[0] === 'pretool') {
+        const d = guardDecision(hookInput(), loadConfig(), readK());
+        if (d) console.log(JSON.stringify(d));
+        return;
+      }
+      if (args[0] === 'start') {
+        const input = hookInput();
+        detached('ingest', '--quiet');
+        let lines = [];
+        try {
+          lines = startMessages(input);
+        } catch {}
+        if (lines.length) console.log(JSON.stringify({ systemMessage: lines.join(' ') }));
         return;
       }
       detached('ingest', '--quiet', ...(args[0] === 'stop' ? ['--no-poll'] : []));
@@ -188,6 +236,55 @@ async function main() {
       if (!flag('no-open')) openFile(out);
       return;
     }
+    case 'alarm': {
+      // Spawned detached by the prompt hook; sleeps until the reset, notifies, exits.
+      const at = Date.parse(args[0] || '');
+      if (!Number.isFinite(at)) return;
+      await alarm(at, { kind: opt('window') || '5-hour' });
+      return;
+    }
+    case 'team': {
+      if (args[0] === 'export') {
+        const cfg = loadConfig();
+        const summary = await buildSummary({ poll: 'auto' });
+        const digest = teamDigest(summary, { label: opt('label') || cfg.teamLabel, seed: quotameterHome() });
+        const out = opt('out') || path.join(quotameterHome(), `team-${digest.label}.json`);
+        fs.writeFileSync(out, JSON.stringify(digest, null, 2) + '\n', PRIVATE);
+        console.log(`Wrote ${out}: aggregate numbers for the last 30 days, labelled "${digest.label}". No paths, titles, branches or hostnames in it.`);
+        return;
+      }
+      if (args[0] === 'report') {
+        const files = args.slice(1).filter((a) => !a.startsWith('--'));
+        if (!files.length) return console.log('Usage: quotameter team report <digest.json> [more.json ...]');
+        console.log(teamReport(readDigests(files)));
+        return;
+      }
+      return console.log('Usage: quotameter team export [--label name] [--out file] | quotameter team report <files...>');
+    }
+    case 'precheck': {
+      // For scripts and CI around headless `claude -p`: exit 0 when enough of
+      // the limit is left, 1 when not, 2 when nothing is known.
+      const min = Number(opt('min') ?? 25);
+      const kind = (opt('window') || '5h').startsWith('w') ? 'weekly_all' : 'session';
+      const name = kind === 'session' ? '5-hour' : 'weekly';
+      if (!flag('no-poll')) await ingest({ poll: 'auto' });
+      const r = latestReadings()[kind];
+      const resets = r?.resetsAt ? Date.parse(r.resetsAt) : NaN;
+      if (!r || !Number.isFinite(resets) || resets <= Date.now()) {
+        console.log(`No current ${name} reading. Run quotameter poll, or check quotameter doctor.`);
+        process.exitCode = 2;
+        return;
+      }
+      const left = 100 - r.percent;
+      const when = new Date(resets).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (left < min) {
+        console.log(`Aborted: ${name} limit has ${left}% left, ${min}% required; resets at ${when}.`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`OK: ${name} limit has ${left}% left (${min}% required); resets at ${when}.`);
+      return;
+    }
     case 'mark': {
       if (args[0] !== 'code-only') return console.log('Usage: quotameter mark code-only [--week] [--undo]');
       const kind = flag('week') ? 'weekly_all' : 'session';
@@ -244,6 +341,12 @@ async function main() {
         sl = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')).statusLine?.command;
       } catch {}
       ok(isOurs(sl), isOurs(sl) ? 'Status line: set up (records a reading every minute while you work)' : 'Status line: not set up. Run /quotameter:setup or "quotameter setup".');
+      const cfg = loadConfig();
+      if (cfg.syncDir) {
+        const { importSync } = await import('../lib/sync.js');
+        const sync = importSync(cfg);
+        ok(fs.existsSync(cfg.syncDir), `Sync folder: ${cfg.syncDir}${sync.machines.length ? ` (${sync.machines.map((m) => m.name + (m.error ? `: ${m.error}` : '')).join(', ')})` : ' (no other computer yet)'}`);
+      }
       ok(true, `Store: ${quotameterHome()}`);
       return;
     }

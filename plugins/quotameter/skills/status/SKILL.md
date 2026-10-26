@@ -13,6 +13,6 @@ Run:
 node "<base>/../../bin/quotameter.js" status
 ```
 
-It reads new log data, takes a free `/usage` reading only if the last one is older than ten minutes, and prints a short summary. Show the output to the user as it is; do not reword the numbers. If they want to know more, mention `/quotameter:report` for the full page.
+It reads new log data, takes a free `/usage` reading only if the last one is older than ten minutes, and prints a short summary, including what fits before the reset. Show the output to the user as it is; do not reword the numbers. If they want to know more, mention `/quotameter:report` for the full page. If they ask whether a script or CI job can run, mention `quotameter precheck --min <percent>`.
 
 If it prints "No limit readings yet", show the reason it gives and the command it suggests. If `node` is not found, tell the user to install Node 18 or newer (see the README's Requirements) and restart Claude Code. Do not read the user's session logs yourself.

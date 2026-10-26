@@ -4,12 +4,15 @@
 import { readAll, readState } from '../store.js';
 import { mergeMessage } from '../ingest/logs.js';
 import { HOUR, DAY } from './util.js';
+import { loadConfig } from '../config.js';
+import { importSync, dedupeReadings } from '../sync.js';
 
 // Rows that retention already summarised are skipped, so a crash between
 // writing summaries and rewriting the raw files cannot count them twice.
 export const roundMinute = (t) => Math.round(t / 60000) * 60000;
 
-export function loadData(state = readState()) {
+// remote: false leaves other machines out (retention summarises only this machine).
+export function loadData(state = readState(), { remote = true, config = null, now = Date.now() } = {}) {
   const cb = state.compactedBefore || 0;
   const archived = state.archived || {};
   const live = (s) => !archived[s];
@@ -49,8 +52,16 @@ export function loadData(state = readState()) {
     }
   }
 
+  // Other computers, through the sync folder: their responses carry a
+  // reconciled total per hashed session, so they join the cost index like
+  // local ones and calibration sees the whole account's Code usage.
+  const sync = remote ? importSync(config || loadConfig(), now) : { messages: [], costs: new Map(), readings: [], machines: [] };
+  for (const m of sync.messages) messages.push({ ...m, t: Date.parse(m.ts) });
+  for (const [session, total] of sync.costs) trueCost.set(session, total);
+  const machines = sync.machines;
+
   // Windows that reset before the cutoff live on as summaries in windows.jsonl.
-  const readings = [...readAll('readings'), ...statusRows.filter((l) => l.percent != null)]
+  const readings = dedupeReadings([...readAll('readings'), ...statusRows.filter((l) => l.percent != null), ...sync.readings])
     .map((r) => ({ ...r, t: Date.parse(r.ts), r: r.resetsAt ? Date.parse(r.resetsAt) : null }))
     .filter((r) => Number.isFinite(r.t) && (r.r != null ? roundMinute(r.r) > cb : r.t >= cb - 8 * DAY))
     .sort((a, b) => a.t - b.t);
@@ -58,7 +69,7 @@ export function loadData(state = readState()) {
   const activity = readAll('activity').map((a) => Date.parse(a.ts)).filter((t) => Number.isFinite(t) && t >= cb);
   const overheadRows = readAll('overhead');
   const overhead = overheadRows.length ? overheadRows[overheadRows.length - 1] : null;
-  return { messages, sessions, trueCost, costMeta, readings, activity, overhead, ...loadArchive(state) };
+  return { messages, sessions, trueCost, costMeta, readings, activity, overhead, machines, ...loadArchive(state) };
 }
 
 // Summaries written by retention. Daily rows become one message per model,

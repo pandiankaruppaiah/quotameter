@@ -37,7 +37,10 @@ export function prepare(data, config) {
   return { unitemised, costIn, kinds };
 }
 
-export function analyze({ now = Date.now(), data = loadData(), config = loadConfig(), pollError = null } = {}) {
+export function analyze({ now = Date.now(), data = null, config = loadConfig(), pollError = null } = {}) {
+  // Loaded with the same clock, so rows from other computers are judged
+  // against `now` rather than the wall clock (tests run at other dates).
+  data ??= loadData(undefined, { now, config });
   const { messages, sessions, readings, overhead } = data;
   // With redactPaths on, titles stored before it was turned on stay hidden too.
   if (config.redactPaths) {
@@ -87,6 +90,7 @@ export function analyze({ now = Date.now(), data = loadData(), config = loadConf
         desktop: round(attr.bySurface.desktop || 0, 2),
         headless: round(attr.bySurface.headless || 0, 2),
         unitemised: round(attr.bySurface.unitemised || 0, 2),
+        remote: round(attr.bySurface.remote || 0, 2),
         chat: round(attr.chat, 2),
       };
     }
@@ -144,7 +148,7 @@ export function analyze({ now = Date.now(), data = loadData(), config = loadConf
   result.overhead = overheadView(overhead, result.breakdown.d30);
   result.value = value(msgs30, chat30, kWeek, config);
   result.unitemisedCost = round(unitemisedAll, 2);
-  result.sources = { ...sourcesView(data, readings), pollError };
+  result.sources = { ...sourcesView(data, readings), pollError, machines: data.machines || [] };
   result.insights = insights({ messages, sessions, chatByKind, k: { h5: result.calibration.h5.k, wk: kWeek }, windows: result.windows, tpd30, now, plan: config.plan || 'pro', archive: { windows: archivedWindows } });
   result.recommendations = recommend(result, msgs30);
   return result;
