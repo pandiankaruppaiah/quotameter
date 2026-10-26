@@ -4,7 +4,7 @@
 import { HOUR, DAY, sum, round, percentile } from './util.js';
 import { roundMinute } from './load.js';
 
-const WINDOW_MS = { session: 5 * HOUR, weekly_all: 7 * DAY };
+const WINDOW_MS = { session: 5 * HOUR, weekly_all: 7 * DAY, weekly_scoped: 7 * DAY };
 
 export function buildWindows(readings, kind) {
   const dur = WINDOW_MS[kind];
@@ -68,13 +68,15 @@ export function calibrate(wins, costIn, activity, codeOnly, minPct) {
     const pts = w.pct - idle;
     if (w.pct < minPct || code <= 0 || pts <= 0) continue;
     const end = Math.min(w.resetsAt, w.last.t);
-    const busyDesktop = activity.some((t) => t >= w.start && t <= end);
+    // Desktop Chat cannot move a model-scoped window, so it never taints one.
+    const busyDesktop = w.kind === 'weekly_scoped' ? false : activity.some((t) => t >= w.start && t <= end);
     const marked = codeOnly.includes(w.resetsAt);
     samples.push({ r: pts / code, clean: marked || (!busyDesktop && idle === 0), marked });
   }
   const clean = samples.filter((s) => s.clean).map((s) => s.r);
   const all = samples.map((s) => s.r);
-  const k = clean.length ? percentile(clean, 0.5) : percentile(all.slice(-20), 0.2);
+  // Unclean windows hide chat, so the low end is taken; a scoped window has no chat.
+  const k = clean.length ? percentile(clean, 0.5) : percentile(all.slice(-20), wins[0]?.kind === 'weekly_scoped' ? 0.5 : 0.2);
   return { k, windows: samples.length, cleanWindows: clean.length, marked: samples.filter((s) => s.marked).length, provisional: samples.length < 5 };
 }
 

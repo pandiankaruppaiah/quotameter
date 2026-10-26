@@ -65,7 +65,7 @@ Restart Claude Code, then:
 /quotameter:status
 ```
 
-`/quotameter:setup` adds a status line that shows `5h 17% (resets 5:39pm) | wk 3%` and records a reading every minute while you work. It shows you the change to `~/.claude/settings.json` first, keeps a backup, and keeps your existing status line if you have one. Do this step: every estimate in the report is built from these readings.
+`/quotameter:setup` adds a status line that shows `5h 17% (this window 4%, resets 5:39pm) | ctx 12% | wk 3%` and records a reading every minute while you work. It shows you the change to `~/.claude/settings.json` first, keeps a backup, and keeps your existing status line if you have one. Do this step: every estimate in the report is built from these readings.
 
 `/quotameter:status` answers in the terminal: both limits, where your pace ends up, what fits before the reset. `/quotameter:report` opens the full report. The rest happens by itself while you work; see [During a session](#during-a-session).
 
@@ -117,7 +117,7 @@ If you ran `/quotameter:setup`, run `/quotameter:setup remove` first (or `quotam
 
 Once installed, quotameter works inside Claude Code without being asked:
 
-- **Status line:** `5h 41% (this session 14%, resets 2:50am) | ctx 62% | wk 18%`. Both limits, what this session has used so far, and how full the context is.
+- **Status line:** `5h 41% (this window 14%, resets 2:50am) | ctx 62% | wk 18% | fable 42%`. Both limits, what this session has used since the current window began, how full the context is, and on Max plans the Fable cap.
 - **Warnings:** one line in Claude Code when a limit passes 80% and again at 95% (`warnAt`), and once per session when the context passes 150K tokens with what each turn now costs and a pointer to `/compact` (`ctxNudgeAt`).
 - **A quota-aware assistant:** from 70% of the 5-hour window (`adviseAt`), Claude is told, once per 5% band, that quota is tight and to prefer lighter models for routine steps, avoid re-reading large files and keep output short. You do not see this; Claude acts on it.
 - **File guard:** before Claude reads a file larger than 512 KB (`fileGuardKB`), Claude Code asks you first, with the size, the token estimate and the share of your window it would take.
@@ -129,7 +129,7 @@ For scripts and CI around headless `claude -p`: `quotameter precheck --min 25` e
 
 ## What the report shows
 
-**Right now.** Both limits as meters with one plain sentence each: how much is used, when it resets, where your current pace ends up (as a range when your recent pace and the window average disagree), and what fits before the reset: quick tasks, typical sessions, heavy ones. Tokens are quoted as fresh tokens (input, output, cache writes); cache reads are listed but never extrapolated, so a new session is not promised tokens it does not have.
+**Right now.** Both limits as meters with one plain sentence each (three on Max plans, where Fable and Mythos usage also count against a cap of 50% of the week): how much is used, when it resets, where your current pace ends up (as a range when your recent pace and the window average disagree), and what fits before the reset: quick tasks, typical sessions, heavy ones. Tokens are quoted as fresh tokens (input, output, cache writes); cache reads are listed but never extrapolated, so a new session is not promised tokens it does not have.
 
 **What used your limit.** Each window split into Claude Code, Desktop agent sessions, headless runs and estimated chat. Then a breakdown for the 5-hour window, this week, 30 days or 90 days: models (main conversation and subagents), projects and branches, your most expensive sessions, subagents, skills, tools, MCP servers and plugins.
 
@@ -199,7 +199,7 @@ Details in [PRIVACY.md](PRIVACY.md). To report a security problem, see [SECURITY
 
 ```
 quotameter status [--no-poll]                      both limits, the split, what fits before the reset; no browser
-quotameter precheck [--min 25] [--window week]     exit 0 when enough is left, for scripts and CI
+quotameter precheck [--min 25] [--window week|fable]  exit 0 when enough is left, for scripts and CI
 quotameter team export [--label name] [--out f]    a digest of aggregate numbers for a team lead
 quotameter team report <files...>                  a table from several digests
 quotameter report [--text | --json] [--no-open]   build the report and open it (default)
@@ -221,7 +221,7 @@ In Claude Code: `/quotameter:status`, `/quotameter:report`, `/quotameter:setup`.
 | `keepDays` | `90` | Days of raw data to keep before summarising (at least 35) |
 | `pollIntervalMin` | `10` | Minutes between free `/usage` readings taken by hooks |
 | `warnAt` | `80` | The prompt hook warns once when a limit reaches this percentage, and again at 95. `0` turns warnings off |
-| `adviseAt` | `70` | From this percentage of the 5-hour window (weekly: 10 more), Claude is told to go easy on quota, once per 5% band. `0` turns it off |
+| `adviseAt` | `70` | From this percentage of the 5-hour window (weekly and Fable: 10 more), Claude is told to go easy on quota, once per 5% band. `0` turns it off |
 | `ctxNudgeAt` | `150000` | Context size in tokens at which the prompt hook suggests `/compact`, once per session. `0` turns it off |
 | `resetAlarm` | `true` | A desktop notification when a limit that reached 95% resets |
 | `fileGuardKB` | `512` | Ask before Claude reads a file larger than this. `0` turns the guard off |
@@ -251,6 +251,7 @@ Start with `quotameter doctor` (or `npx github:pandiankaruppaiah/quotameter doct
 ## Limits
 
 - Chat usage is an estimate, and so are the per-tool shares. Chat includes Claude Code on computers that are not sharing a sync folder.
+- The status line input from Claude Code does not carry the Fable cap, so `fable 42%` comes from the newest `/usage` reading (every ten minutes while you work).
 - Percentages arrive as whole numbers, so very short windows are noisy.
 - Claude Code's log format is undocumented and can change. quotameter skips what it cannot parse rather than failing.
 

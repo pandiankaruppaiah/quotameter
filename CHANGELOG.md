@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (2026-10-27)
+
+Three fixes from the first day on a Max plan.
+
+- **The Fable window.** Max plans cap Fable and Mythos usage at 50% of the week; `/usage` reports it as a third window. It now appears in `status`, the report (third meter, product stack, a "Fable this week" breakdown), the status line (`fable 42%`), the warnings, the advice, the reset alarm and `precheck --window fable`. It gets its own calibration from Fable-only usage, so no chat guessing is needed there.
+- **The status line share is of this window.** It showed "this session 135%" because a session that spans two 5-hour windows carried its whole total. It now shows what the session spent since the current window began (`this window 14%`), remembered in `window-base.json` at each roll-over.
+- **Calibration for the status line follows the window in progress.** `k.json` was written only by `status` and `report`, from the median of older windows, and was twice too high for a cache-heavy session. The background ingest now refreshes it every 30 minutes, preferring the current window's own ratio once that window is past 20% and shows no chat.
+
+
 ## 0.3.0 (2026-10-27)
 
 Quota-aware sessions: what quotameter knows now reaches you, and the assistant, while you work. From the innovation brainstorm (docs/reviews/agy-21) and plan review (agy-22).

@@ -5,7 +5,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { append, storePath, readK, PRIVATE } from './store.js';
+import { append, storePath, readK, writeJsonAtomic, PRIVATE } from './store.js';
+import { latestReadings } from './warn.js';
 import { loadConfig } from './config.js';
 import { claudeConfigDir } from './paths.js';
 
@@ -52,16 +53,52 @@ function record(input) {
   }
 }
 
-// `5h 41% (this session 14%, resets 2:50am) | ctx 62% | wk 18%`. The session
-// share uses the 5-hour k the last analysis wrote; before that, dollars.
-export function statusText(input, k = null) {
+// A session can outlive a 5-hour window. The share shown is what this
+// session spent since the window began: its running total minus the total
+// it had when the window rolled over, remembered in window-base.json.
+const BASE = 'window-base.json';
+// One entry per session (several can be open), each with the window it last
+// saw, the running total when that window began, and the latest total seen.
+// At a roll-over the base is the total from the previous refresh, so the
+// first turn of the new window is not lost. Without a reset time there is
+// no window to measure against, and no share is shown.
+export function windowBase(input, now = Date.now()) {
+  const session = input.session_id;
+  const resetsAt = input.rate_limits?.five_hour?.resets_at;
+  const cost = input.cost?.total_cost_usd;
+  if (!session || !resetsAt || typeof cost !== 'number') return null;
+  let all = {};
+  try {
+    all = JSON.parse(fs.readFileSync(storePath(BASE), 'utf8')) || {};
+  } catch {}
+  if (all.session) all = {}; // the 0.3.1 pre-release single-entry form
+  const prev = all[session];
+  let entry;
+  if (prev && prev.resetsAt === resetsAt) entry = { ...prev, last: cost };
+  else entry = { session, resetsAt, cost: prev ? Math.min(prev.last ?? cost, cost) : 0, last: cost, ts: new Date(now).toISOString() };
+  if (!prev || prev.resetsAt !== resetsAt || prev.last !== cost) {
+    all[session] = entry;
+    // Keep the newest 20 sessions, so the file cannot grow without bound.
+    const keep = Object.values(all).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts)).slice(0, 20);
+    writeJsonAtomic(storePath(BASE), Object.fromEntries(keep.map((e) => [e.session, e])));
+  }
+  return entry;
+}
+
+// `5h 41% (this window 14%, resets 2:50am) | ctx 62% | wk 18% | fable 42%`.
+// The window share uses the 5-hour k the last analysis wrote; before that,
+// dollars. The Fable cap comes from the newest stored reading, since the
+// status line input does not carry it.
+export function statusText(input, k = null, base = null, fable = null) {
   input = input && typeof input === 'object' ? input : {};
   const rl = input.rate_limits || {};
   const parts = [];
   const h = rl.five_hour;
   const w = rl.seven_day;
-  const cost = input.cost?.total_cost_usd;
-  const session = typeof cost === 'number' && cost > 0 ? (k?.h5 ? `this session ${(cost * k.h5).toFixed(cost * k.h5 >= 10 ? 0 : 1)}%` : `this session $${cost.toFixed(2)}`) : '';
+  const total = input.cost?.total_cost_usd;
+  // No base (no reset time yet, or no session id): the whole-session total would mislead, so no share.
+  const cost = typeof total === 'number' && base && base.session === input.session_id ? Math.max(0, total - base.cost) : null;
+  const session = cost > 0 ? (k?.h5 ? `this window ${(cost * k.h5).toFixed(cost * k.h5 >= 10 ? 0 : 1)}%` : `this window $${cost.toFixed(2)}`) : '';
   if (typeof h?.used_percentage === 'number') {
     const inside = [session, h.resets_at ? `resets ${clock(h.resets_at)}` : ''].filter(Boolean).join(', ');
     parts.push(`5h ${Math.round(h.used_percentage)}%${inside ? ` (${inside})` : ''}`);
@@ -69,6 +106,7 @@ export function statusText(input, k = null) {
   const ctx = input.context_window?.used_percentage;
   if (typeof ctx === 'number') parts.push(`ctx ${Math.round(ctx)}%`);
   if (typeof w?.used_percentage === 'number') parts.push(`wk ${Math.round(w.used_percentage)}%`);
+  if (fable && typeof fable.percent === 'number' && fable.resetsAt && Date.parse(fable.resetsAt) > Date.now()) parts.push(`fable ${fable.percent}%`);
   // Before the first response Claude Code sends no limits yet.
   return parts.length ? parts.join(' | ') : '5h -- | wk --';
 }
@@ -133,7 +171,12 @@ export async function statusline({ wrap } = {}) {
   try {
     k = readK();
   } catch {}
-  const ours = statusText(input, k);
+  let base = null, fable = null;
+  try {
+    base = windowBase(input);
+    fable = latestReadings().weekly_scoped || null;
+  } catch {}
+  const ours = statusText(input, k, base, fable);
   // `quotameter setup` keeps a wrapped command in config.json rather than on
   // the command line, so nothing needs quoting inside settings.json.
   let wrapped = wrap;

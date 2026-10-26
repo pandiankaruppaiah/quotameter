@@ -637,9 +637,11 @@ test('advice for the assistant: only when tight, once per 5% band, never a user 
 
 test('status line shows the session share and context, with k and without', async () => {
   const input = { rate_limits: { five_hour: { used_percentage: 42, resets_at: 1791873600 }, seven_day: { used_percentage: 7 } }, cost: { total_cost_usd: 1.25 }, context_window: { used_percentage: 61.7 } };
-  assert.match(statusText(input, null), /^5h 42% \(this session \$1\.25, resets .+\) \| ctx 62% \| wk 7%$/);
-  assert.match(statusText(input, { h5: 4 }), /this session 5\.0%/);
-  assert.match(statusText({ ...input, context_window: { used_percentage: null } }, null), /^5h 42% \(this session \$1\.25, resets .+\) \| wk 7%$/, 'no context before the first call');
+  const base = { session: 's1', resetsAt: 1791873600, cost: 0 };
+  assert.match(statusText({ ...input, session_id: 's1' }, null, base), /^5h 42% \(this window \$1\.25, resets .+\) \| ctx 62% \| wk 7%$/);
+  assert.match(statusText({ ...input, session_id: 's1' }, { h5: 4 }, base), /this window 5\.0%/);
+  assert.match(statusText(input, { h5: 4 }), /^5h 42% \(resets .+\) \| ctx 62% \| wk 7%$/, 'no window base, no share');
+  assert.match(statusText({ ...input, session_id: 's1', context_window: { used_percentage: null } }, null, base), /^5h 42% \(this window \$1\.25, resets .+\) \| wk 7%$/, 'no context before the first call');
   assert.equal(statusText({ context_window: { used_percentage: 3 } }), 'ctx 3%');
 });
 
@@ -835,6 +837,88 @@ test('file guard: asks before a big Read, lets everything else through, stores n
     assert.match(out, /"permissionDecision":"ask"/);
     const stored = fs.readdirSync(process.env.QUOTAMETER_HOME).map((f) => fs.readFileSync(path.join(process.env.QUOTAMETER_HOME, f), 'utf8')).join('');
     assert.ok(!stored.includes('bundle.js'));
+  } finally {
+    restore();
+  }
+});
+
+const DAY_MS = 24 * H;
+
+// ---------- 0.3.1 ----------
+
+test('the Fable window: only Fable usage moves it, and it gets its own calibration', async () => {
+  const restore = ownStore('fable');
+  try {
+    const { append } = await import('../plugins/quotameter/lib/store.js');
+    const now = Date.parse('2027-05-10T03:00:00Z');
+    const weekReset = now + 2 * 24 * H, start = weekReset - 7 * DAY_MS;
+    append('messages', [
+      msgRow({ id: 'fb1', ts: iso(start + 10 * H), session: 'sf', model: 'claude-fable-5-1', cost: 4 }),
+      msgRow({ id: 'op1', ts: iso(start + 11 * H), session: 'so', model: 'claude-opus-5-5', cost: 4 }),
+    ]);
+    append('costs', [{ session: 'sf', run: 'r', ts: iso(start + 12 * H), totalCost: 4, models: {} }, { session: 'so', run: 'r', ts: iso(start + 12 * H), totalCost: 4, models: {} }]);
+    append('readings', [
+      { ts: iso(start + 9 * H), source: 'usage-poll', kind: 'session', group: 'session', percent: 0, resetsAt: iso(start + 14 * H) },
+      { ts: iso(start + 9 * H), source: 'usage-poll', kind: 'weekly_all', group: 'weekly', percent: 0, resetsAt: iso(weekReset) },
+      { ts: iso(start + 9 * H), source: 'usage-poll', kind: 'weekly_scoped', group: 'weekly', percent: 0, resetsAt: iso(weekReset) },
+      { ts: iso(start + 13 * H), source: 'usage-poll', kind: 'session', group: 'session', percent: 16, resetsAt: iso(start + 14 * H) },
+      { ts: iso(start + 13 * H), source: 'usage-poll', kind: 'weekly_all', group: 'weekly', percent: 4, resetsAt: iso(weekReset) },
+      { ts: iso(start + 13 * H), source: 'usage-poll', kind: 'weekly_scoped', group: 'weekly', percent: 10, resetsAt: iso(weekReset) },
+    ]);
+    const s = analyze({ now, config: { plan: 'max5', codeOnlyWindows: [] } });
+    assert.equal(s.windows.fable.pct, 10);
+    assert.ok(Math.abs(s.calibration.fable.k - 2.5) < 0.01, `fable k was ${s.calibration.fable.k}: 10 points for $4 of Fable only`);
+    assert.ok(s.attribution.fable.cli > 9.9 && s.attribution.fable.chat < 0.1, JSON.stringify(s.attribution.fable));
+    assert.ok(s.breakdown.fable.models.every((m) => m.chat || m.unitemised || /fable/.test(m.model)), 'only Fable rows in the Fable breakdown');
+    assert.ok(s.breakdown.wk.models.some((m) => /opus/.test(m.model)), 'the weekly breakdown still has everything');
+    const { renderText } = await import('../plugins/quotameter/lib/report/render.js');
+    assert.match(renderText(s), /Fable\s+10% used/);
+    // A plan without the cap: no window, no row.
+    const none = analyze({ now, data: { ...(await import('../plugins/quotameter/lib/model/load.js')).loadData(undefined, { now }), readings: [] }, config: { plan: 'pro', codeOnlyWindows: [] } });
+    assert.equal(none.windows.fable, null);
+  } finally {
+    restore();
+  }
+});
+
+test('status line: the share is of this window, and the Fable cap rides along', async () => {
+  const { statusText, windowBase } = await import('../plugins/quotameter/lib/statusline.js');
+  const input = { session_id: 's1', rate_limits: { five_hour: { used_percentage: 42, resets_at: 1791873600 }, seven_day: { used_percentage: 7 } }, cost: { total_cost_usd: 10 } };
+  assert.match(statusText(input, { h5: 2 }, { session: 's1', resetsAt: 1791873600, cost: 8 }), /this window 4\.0%/, '(10 - 8) x 2');
+  assert.ok(!/this window/.test(statusText(input, { h5: 2 }, { session: 'other', resetsAt: 1791873600, cost: 8 })), 'a base from another session gives no share');
+  assert.match(statusText(input, null, null, { percent: 42, resetsAt: iso(Date.now() + H) }), /\| fable 42%$/);
+  assert.ok(!/fable/.test(statusText(input, null, null, { percent: 42, resetsAt: iso(Date.now() - 1) })), 'a reset cap is not shown');
+  const restore = ownStore('base');
+  try {
+    const first = windowBase(input);
+    assert.equal(first.cost, 0, 'a session seen for the first time starts at zero');
+    assert.equal(windowBase(input).cost, 0, 'same window: same base');
+    const rolled = windowBase({ ...input, rate_limits: { five_hour: { used_percentage: 1, resets_at: 1791891600 } }, cost: { total_cost_usd: 15 } });
+    assert.equal(rolled.cost, 10, 'the window rolled over: the total before this turn stays before, the turn itself counts in the new window');
+    const other = windowBase({ ...input, session_id: 's2', cost: { total_cost_usd: 3 } });
+    assert.equal(other.cost, 0);
+    assert.equal(windowBase({ ...input, rate_limits: { five_hour: { used_percentage: 1, resets_at: 1791891600 } }, cost: { total_cost_usd: 16 } }).cost, 10, 'another session does not disturb the first one');
+  } finally {
+    restore();
+  }
+});
+
+test('warnings, precheck and k.json know the Fable window', async () => {
+  const { warningFor } = await import('../plugins/quotameter/lib/warn.js');
+  const now = Date.parse('2026-10-20T10:00:00Z');
+  const w = warningFor({ weekly_scoped: { ts: iso(now), percent: 96, resetsAt: iso(now + 48 * H) } }, { warnAt: 80 }, now, []);
+  assert.match(w.message, /Fable limit at 96%/);
+  const restore = ownStore('fablecheck');
+  try {
+    const { spawnSync } = await import('node:child_process');
+    const { append, readK } = await import('../plugins/quotameter/lib/store.js');
+    append('live', [{ ts: new Date().toISOString(), source: 'statusline', kind: 'weekly_scoped', group: 'weekly', percent: 70, resetsAt: iso(Date.now() + 2 * DAY_MS) }]);
+    const r = spawnSync(process.execPath, [cliPath, 'precheck', '--no-poll', '--window', 'fable', '--min', '25'], { encoding: 'utf8', env: process.env });
+    assert.equal(r.status, 0, r.stdout);
+    assert.match(r.stdout, /Fable limit has 30% left/);
+    assert.equal(readK(), null);
+    await ingest({ poll: false });
+    assert.ok(readK()?.ts, 'the background ingest writes k.json for the hooks');
   } finally {
     restore();
   }

@@ -6,6 +6,7 @@ import { readDesktopHistory, readDesktopActivity } from './desktop.js';
 import { pollUsage, cleanupPollLogs } from './usage-poll.js';
 import { pollIsDue, notePollAttempt } from '../warn.js';
 import { exportSync } from '../sync.js';
+import { readK } from '../store.js';
 
 export function newestReadingTs() {
   let last = 0;
@@ -22,7 +23,15 @@ export function newestReadingTs() {
 // poll: 'auto' runs `claude -p /usage` only when the newest reading is older
 // than the configured interval; true forces it; false never polls.
 // The poll runs outside the lock because it can take several seconds.
-export async function ingest({ poll = 'auto', only } = {}) {
+// Hooks never analyse, so the background ingest keeps k.json fresh for them.
+async function refreshK() {
+  const k = readK();
+  if (k && Date.now() - Date.parse(k.ts) < 30 * 60000) return;
+  const { analyze, saveK } = await import('../model/analyze.js');
+  saveK(analyze());
+}
+
+export async function ingest({ poll = 'auto', only, refresh = true } = {}) {
   const cfg = loadConfig();
   let pollResult = null;
   // Stale means no reading and no attempt for pollIntervalMin, so a poll
@@ -40,7 +49,7 @@ export async function ingest({ poll = 'auto', only } = {}) {
     }
   }
 
-  return withLock(async () => {
+  const result = await withLock(async () => {
     const state = readState();
     const scan = scanAll(state, { only, redactPaths: cfg.redactPaths });
     const readings = [...scan.readings, ...readDesktopHistory(state)];
@@ -75,4 +84,12 @@ export async function ingest({ poll = 'auto', only } = {}) {
       ...(compacted && !compacted.skipped ? { compacted } : {}),
     };
   });
+  // Reads outside the lock are fine: readAll skips a line cut mid-write.
+  // A busy lock still gets k.json written when it is missing altogether.
+  if (refresh && (!result?.skipped || !readK())) {
+    try {
+      await refreshK();
+    } catch {}
+  }
+  return result;
 }

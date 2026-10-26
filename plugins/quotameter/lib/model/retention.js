@@ -58,6 +58,7 @@ function windowRows(kinds, messages, cutoff, done) {
   const out = [];
   const h5 = kinds.session?.attributed || [];
   for (const [kind, { cal, attributed }] of Object.entries(kinds)) {
+    if (kind === 'weekly_scoped') continue; // 35 days of raw readings is all the Fable cap needs
     for (const a of attributed) {
       const w = a.w;
       if (w.resetsAt > cutoff || done.has(keyOf({ kind, resetsAt: w.resetsAt }))) continue;

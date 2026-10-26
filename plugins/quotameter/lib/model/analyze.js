@@ -12,6 +12,11 @@ import { insights } from './insights.js';
 import { makeCostIndex, buildWindows, calibrate, attribute, forecast } from './windows.js';
 import { breakdown } from './breakdown.js';
 import { familyOf, SERIES } from './models.js';
+import { readK, writeK } from '../store.js';
+
+// Max plans cap one model family ("Fable, up to 50% of your weekly limit");
+// /usage reports that window as kind weekly_scoped. Only these models move it.
+export const SCOPED = /fable|mythos/;
 
 export { loadData, roundMinute } from './load.js';
 export { familyOf, prettyModel } from './models.js';
@@ -29,12 +34,24 @@ export function prepare(data, config) {
   for (const m of data.archivedMessages || []) messages.push(m);
   const costIn = makeCostIndex(messages);
   const kinds = {};
-  for (const [kind, minPct] of [['session', 5], ['weekly_all', 3]]) {
+  // The scoped window sees only the scoped models' cost, so its calibration
+  // and attribution need no guessing about which usage counted.
+  const scopedMsgs = messages.filter((m) => SCOPED.test(m.model || ''));
+  const costInScoped = makeCostIndex(scopedMsgs);
+  for (const [kind, minPct, ci, pool] of [['session', 5, costIn, messages], ['weekly_all', 3, costIn, messages], ['weekly_scoped', 3, costInScoped, scopedMsgs]]) {
     const wins = buildWindows(readings, kind);
-    const cal = calibrate(wins, costIn, activity, config.codeOnlyWindows || [], minPct);
-    kinds[kind] = { wins, cal, attributed: wins.map((w) => ({ w, ...attribute(w, costIn, cal.k, messages) })) };
+    if (kind === 'weekly_scoped' && !wins.length) continue; // not every plan has one
+    const cal = calibrate(wins, ci, activity, config.codeOnlyWindows || [], minPct);
+    kinds[kind] = { wins, cal, pool, attributed: wins.map((w) => ({ w, ...attribute(w, ci, cal.k, pool) })) };
   }
   return { unitemised, costIn, kinds };
+}
+
+// k.json: what the status line and hooks use instead of running this.
+export function saveK(summary) {
+  const c = summary.calibration;
+  const top = (summary.breakdown.h5?.models || []).find((m) => !m.chat && !m.unitemised);
+  writeK({ h5: c.h5?.now || c.h5?.k || null, wk: c.wk?.now || c.wk?.k || null, fable: c.fable?.now || c.fable?.k || null, model: top?.model || readK()?.model || null });
 }
 
 export function analyze({ now = Date.now(), data = null, config = loadConfig(), pollError = null } = {}) {
@@ -57,15 +74,19 @@ export function analyze({ now = Date.now(), data = null, config = loadConfig(), 
   const result = { generatedAt: new Date(now).toISOString(), windows: {}, calibration: {}, attribution: {}, breakdown: {}, config: { plan: config.plan || 'pro', warnAt: config.warnAt ?? 80 }, series: SERIES };
   const chatByKind = {};
 
-  for (const [kind, label] of [['session', 'h5'], ['weekly_all', 'wk']]) {
-    const { wins, cal, attributed } = kinds[kind];
+  for (const [kind, label] of [['session', 'h5'], ['weekly_all', 'wk'], ['weekly_scoped', 'fable']]) {
+    if (!kinds[kind]) {
+      result.windows[label] = null;
+      continue;
+    }
+    const { wins, cal, attributed, pool } = kinds[kind];
     result.calibration[label] = { k: cal.k, windows: cal.windows, cleanWindows: cal.cleanWindows, marked: cal.marked, provisional: cal.provisional };
     const current = [...wins].reverse().find((w) => w.resetsAt > now) || null;
     const fc = forecast(current, now, kind);
     chatByKind[kind] = attributed;
 
     const attr = current ? chatByKind[kind].find((x) => x.w === current) : null;
-    const inWin = current ? messages.filter((m) => m.t > current.start && m.t <= now) : [];
+    const inWin = current ? pool.filter((m) => m.t > current.start && m.t <= now) : [];
     // Fresh tokens per list-price dollar converts chat points into tokens.
     // Use this window's mix, or the last 30 days when the window has no Code
     // activity. Everything here is in fresh tokens (input, output, cache
@@ -101,11 +122,15 @@ export function analyze({ now = Date.now(), data = null, config = loadConfig(), 
           chatTokens,
           sessions,
           k: cal.k,
-          unit: kind === 'session' ? '% of 5-hour limit' : '% of weekly limit',
+          unit: kind === 'session' ? '% of 5-hour limit' : kind === 'weekly_scoped' ? '% of the Fable limit' : '% of weekly limit',
           total: attr ? attr.w.pct : null,
         })
       : breakdown(inWin, { sessions, unit: 'list-price dollars' });
     result.breakdown[label].range = current ? { start: new Date(current.start).toISOString(), end: new Date(current.resetsAt).toISOString() } : null;
+    // The window in progress, once it has enough in it and shows no chat,
+    // is the best guide to what a dollar costs right now; a cache-heavy
+    // session can sit far from the median of older windows.
+    if (attr && attr.w.pct >= 20 && attr.codeCost > 0 && attr.chat < 1) result.calibration[label].now = round(attr.code / attr.codeCost, 3);
   }
 
   // Last 30 days, in weekly-limit points: a full week is 100.

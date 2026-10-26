@@ -5,13 +5,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ingest } from '../lib/ingest/index.js';
 import { runLocalCommand, pollUsage } from '../lib/ingest/usage-poll.js';
-import { analyze } from '../lib/model/analyze.js';
+import { analyze, saveK } from '../lib/model/analyze.js';
 import { roundMinute } from '../lib/model/load.js';
 import { renderHtml, renderText } from '../lib/report/render.js';
 import { statusline } from '../lib/statusline.js';
 import { loadConfig, saveConfig, DEFAULTS } from '../lib/config.js';
 import { quotameterHome, claudeProjectsDir, desktopDataDirs } from '../lib/paths.js';
-import { readAll, withLock, drainLive, writeK, readK, PRIVATE } from '../lib/store.js';
+import { readAll, withLock, drainLive, readK, PRIVATE } from '../lib/store.js';
 import { redact } from '../lib/model/redact.js';
 import { compact, MIN_KEEP_DAYS } from '../lib/model/retention.js';
 import { setup, describe } from '../lib/setup.js';
@@ -51,7 +51,7 @@ Usage: quotameter <command> [options]
   team report <f..> Table from several digests, plus a waste line each
   precheck          Exit 0 when enough of the limit is left, for scripts and CI
       --min <pct>     Percent that must be left (default 25)
-      --window week   Check the weekly limit instead of the 5-hour one
+      --window week   Check the weekly limit instead of the 5-hour one (or fable)
   mark code-only    Say this 5-hour window had no chat, to sharpen the chat estimate
       --week          The weekly window instead
       --undo          Remove the mark
@@ -105,7 +105,7 @@ function detached(...argv) {
 // Both `status` and `report` build the summary the same way; `report` also
 // refreshes the /context snapshot once a day.
 async function buildSummary({ poll, context = false } = {}) {
-  const r = await ingest({ poll });
+  const r = await ingest({ poll, refresh: false }); // saveK below covers k.json
   if (context) {
     const overhead = readAll('overhead');
     const lastSnap = overhead.length ? Date.parse(overhead[overhead.length - 1].ts) : 0;
@@ -116,10 +116,8 @@ async function buildSummary({ poll, context = false } = {}) {
   }
   const pollError = r?.poll && !['ok', 'skipped'].includes(r.poll) ? r.poll : null;
   const summary = analyze({ pollError });
-  // The status line and hooks read k.json instead of running an analysis.
-  const top = (summary.breakdown.h5?.models || []).find((m) => !m.chat && !m.unitemised);
   try {
-    writeK({ h5: summary.calibration.h5.k, wk: summary.calibration.wk.k, model: top?.model || readK()?.model || null });
+    saveK(summary); // the status line and hooks read k.json instead of running an analysis
   } catch {}
   return summary;
 }
@@ -224,8 +222,9 @@ async function main() {
       // For scripts and CI around headless `claude -p`: exit 0 when enough of
       // the limit is left, 1 when not, 2 when nothing is known.
       const min = Number(opt('min') ?? 25);
-      const kind = (opt('window') || '5h').startsWith('w') ? 'weekly_all' : 'session';
-      const name = kind === 'session' ? '5-hour' : 'weekly';
+      const w = (opt('window') || '5h').toLowerCase();
+      const kind = w.startsWith('f') ? 'weekly_scoped' : w.startsWith('w') ? 'weekly_all' : 'session';
+      const name = kind === 'session' ? '5-hour' : kind === 'weekly_scoped' ? 'Fable' : 'weekly';
       if (!flag('no-poll')) await ingest({ poll: 'auto' });
       const r = latestReadings()[kind];
       const resets = r?.resetsAt ? Date.parse(r.resetsAt) : NaN;

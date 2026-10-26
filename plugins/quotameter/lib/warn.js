@@ -8,7 +8,8 @@ import { FILES, storePath, writeJsonAtomic, readK, PRIVATE } from './store.js';
 import { dur, time, dayTime, fmt } from './report/format.js';
 import { priceFor } from './model/pricing.js';
 
-const KINDS = ['session', 'weekly_all'];
+const KINDS = ['session', 'weekly_all', 'weekly_scoped'];
+const NAME = { session: '5-hour limit', weekly_all: 'weekly limit', weekly_scoped: 'Fable limit' };
 const TAIL = 64 * 1024;
 const ATTEMPT = 'poll-attempt.stamp';
 
@@ -94,7 +95,7 @@ export function alarmFor(latest, { resetAlarm = true } = {}, now = Date.now(), w
     if (!(r.percent >= 95 || ['exceeded', 'critical'].includes(r.severity))) continue;
     const key = `alarm|${kind}|${roundMinute(resets)}`;
     if (warned.includes(key)) continue;
-    return { key, at: roundMinute(resets), kind: kind === 'session' ? '5-hour' : 'weekly' };
+    return { key, at: roundMinute(resets), kind: kind === 'session' ? '5-hour' : kind === 'weekly_scoped' ? 'Fable' : 'weekly' };
   }
   return null;
 }
@@ -136,7 +137,7 @@ export function warningFor(latest, { warnAt = 80 } = {}, now = Date.now(), warne
     const key = `${kind}|${roundMinute(resets)}|${level}`;
     if (warned.includes(key)) continue;
     keys.push(key);
-    const name = kind === 'session' ? '5-hour limit' : 'weekly limit';
+    const name = NAME[kind];
     const when = kind === 'session' ? `${time(r.resetsAt)}` : dayTime(r.resetsAt);
     lines.push(`${name} at ${r.percent}%, resets in ${dur(resets - now)} (${when})`);
   }
@@ -150,17 +151,20 @@ export function warningFor(latest, { warnAt = 80 } = {}, now = Date.now(), warne
 // stays in the context for the rest of the session, so it must be rare.
 export function adviceFor(latest, { adviseAt = 70 } = {}, now = Date.now(), warned = []) {
   if (!(adviseAt > 0)) return null;
-  const h = latest.session, w = latest.weekly_all;
+  const h = latest.session, w = latest.weekly_all, f = latest.weekly_scoped;
   const live = (r) => r?.resetsAt && Date.parse(r.resetsAt) > now;
   const tight5 = live(h) && h.percent >= adviseAt;
   const tightWk = live(w) && w.percent >= Math.min(100, adviseAt + 10);
-  if (!tight5 && !tightWk) return null;
+  const tightF = live(f) && f.percent >= Math.min(100, adviseAt + 10);
+  if (!tight5 && !tightWk && !tightF) return null;
   const band = (r) => Math.floor(r.percent / 5) * 5;
-  const key = `advice|${tight5 ? `session|${roundMinute(Date.parse(h.resetsAt))}|${band(h)}` : ''}|${tightWk ? `weekly|${roundMinute(Date.parse(w.resetsAt))}|${band(w)}` : ''}`;
+  const part = (on, r, name) => (on ? `${name}|${roundMinute(Date.parse(r.resetsAt))}|${band(r)}` : '');
+  const key = `advice|${part(tight5, h, 'session')}|${part(tightWk, w, 'weekly')}|${part(tightF, f, 'fable')}`;
   if (warned.includes(key)) return null;
   const parts = [];
-  if (live(h)) parts.push(`5-hour limit at ${h.percent}% (resets in ${dur(Date.parse(h.resetsAt) - now)})`);
-  if (live(w)) parts.push(`weekly at ${w.percent}%`);
+  if (tight5) parts.push(`5-hour limit at ${h.percent}% (resets in ${dur(Date.parse(h.resetsAt) - now)})`);
+  if (tightWk) parts.push(`weekly at ${w.percent}%`);
+  if (tightF) parts.push(`Fable at ${f.percent}% of its cap`);
   return { key, message: `quotameter: ${parts.join(', ')}. Quota is tight: prefer Sonnet or Haiku for routine steps and subagents, avoid re-reading large files, and keep output short.` };
 }
 

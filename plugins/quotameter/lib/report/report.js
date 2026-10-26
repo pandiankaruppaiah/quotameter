@@ -84,7 +84,9 @@ function meters() {
     : `At this pace you end the window ${projRange(w).includes(' to ') ? 'between' : 'around'} <b>${projRange(w).replace(' to ', '</b> and <b>')}</b>, under the limit.`;
   const h5Lead = h5 ? pace(h5) + ' ' + fitsText(h5, sc, S.insights.sessionLength) : '';
   const wkLead = wk ? pace(wk) + (sc?.leftWeek ? ` About ${sc.leftWeek.typical} typical sessions left this week.` : '') : '';
-  $('#meters').innerHTML = card('5-hour limit', h5, h5Lead) + card('Weekly limit · all models', wk, wkLead);
+  const fb = S.windows.fable;
+  const fbLead = fb ? pace(fb) + ' Only Fable and Mythos usage counts here; it also counts against the weekly limit.' : '';
+  $('#meters').innerHTML = card('5-hour limit', h5, h5Lead) + card('Weekly limit · all models', wk, wkLead) + (fb ? card('Fable limit · up to 50% of the week', fb, fbLead) : '');
 }
 
 // ---------- 5-hour line chart ----------
@@ -119,7 +121,7 @@ function lineChart() {
 // ---------- attribution ----------
 function stacks() {
   const parts = [['cli', 'Claude Code (CLI)', '--series-1'], ['desktop', 'Desktop agent', '--series-2'], ['other', 'Headless and not itemised', '--series-4'], ['remote', 'Claude Code on other computers', '--series-5'], ['chat', 'Chat and other devices (estimated)', '--series-3']];
-  const rows = [['5-hour', S.attribution.h5], ['Weekly', S.attribution.wk]].filter(([, a]) => a);
+  const rows = [['5-hour', S.attribution.h5], ['Weekly', S.attribution.wk], ['Fable', S.attribution.fable]].filter(([, a]) => a);
   if (!rows.length) { $('#stacks').innerHTML = '<div class="empty">Needs at least one limit reading.</div>'; return; }
   $('#stacks').innerHTML = rows.map(([label, a]) => {
     const vals = { cli: a.cli, desktop: a.desktop, other: a.headless + a.unitemised, remote: a.remote || 0, chat: a.chat };
@@ -294,7 +296,7 @@ function useTables() {
 
 // ---------- breakdown ----------
 let WIN = 'h5';
-const UNIT = { h5: 'of 5-hour limit', wk: 'of weekly limit', d30: 'of a weekly limit', d90: 'of a weekly limit', all: 'of a weekly limit' };
+const UNIT = { h5: 'of 5-hour limit', wk: 'of weekly limit', fable: 'of the Fable limit', d30: 'of a weekly limit', d90: 'of a weekly limit', all: 'of a weekly limit' };
 const MC = (m) => { const f = Object.keys(S.series || {}).find((k) => String(m || '').toLowerCase().includes(k)); return f ? `var(--series-${S.series[f]})` : 'var(--series-3)'; };
 function ptsBar(p, max, col, total, cost) {
   if (p == null) return '<span class="muted">n/a</span>';
@@ -302,7 +304,7 @@ function ptsBar(p, max, col, total, cost) {
 }
 function breakdown() {
   const d = S.breakdown[WIN];
-  const notes = { h5: 'Current 5-hour window. Percentages are of your 5-hour limit.', wk: 'Current weekly window. Percentages are of your weekly limit.', d30: 'Last 30 days. Percentages are of a weekly limit, added up across weeks, so 100% is one full week of allowance and 30 days hold about 4.3 weeks.', d90: 'Last 90 days. Percentages are of a weekly limit, added up across weeks, so 100% is one full week of allowance and 90 days hold about 13 weeks.', all: 'Everything quotameter has kept. Percentages are of a weekly limit, added up across weeks. Older days are kept as summaries, so tools and individual sessions only cover the days kept in full.' };
+  const notes = { h5: 'Current 5-hour window. Percentages are of your 5-hour limit.', wk: 'Current weekly window. Percentages are of your weekly limit.', fable: 'Current weekly window, Fable and Mythos usage only. Percentages are of the Fable limit (up to 50% of your weekly limit).', d30: 'Last 30 days. Percentages are of a weekly limit, added up across weeks, so 100% is one full week of allowance and 30 days hold about 4.3 weeks.', d90: 'Last 90 days. Percentages are of a weekly limit, added up across weeks, so 100% is one full week of allowance and 90 days hold about 13 weeks.', all: 'Everything quotameter has kept. Percentages are of a weekly limit, added up across weeks. Older days are kept as summaries, so tools and individual sessions only cover the days kept in full.' };
   // Say plainly when a long range holds less than its name promises.
   const span = WIN === 'd90' && d.dataFrom ? Math.max(1, Math.ceil((Date.parse(d.range.end) - Date.parse(d.dataFrom)) / 864e5)) : null;
   const partial = span != null && span < 89 ? `quotameter has ${span} day${span === 1 ? '' : 's'} of data so far, from ${dayTime(d.dataFrom)}. This view fills up to 90 days as it keeps collecting. ` : '';
@@ -398,8 +400,8 @@ function recsView() {
 // ---------- wiring ----------
 // Ranges with data only: 90 days and all history appear once there is more than the shorter range holds.
 function rangeButtons() {
-  const label = { h5: '5-hour window', wk: 'This week', d30: '30 days', d90: '90 days', all: 'All history' };
-  $('#winSel').innerHTML = ['h5', 'wk', 'd30', 'd90', 'all'].filter((k) => S.breakdown[k]).map((k) => `<button role="tab" data-win="${k}" aria-selected="${k === WIN}">${label[k]}</button>`).join('');
+  const label = { h5: '5-hour window', wk: 'This week', fable: 'Fable this week', d30: '30 days', d90: '90 days', all: 'All history' };
+  $('#winSel').innerHTML = ['h5', 'wk', 'fable', 'd30', 'd90', 'all'].filter((k) => S.breakdown[k]).map((k) => `<button role="tab" data-win="${k}" aria-selected="${k === WIN}">${label[k]}</button>`).join('');
   document.querySelectorAll('#winSel button').forEach((b) => b.addEventListener('click', () => {
     WIN = b.dataset.win;
     document.querySelectorAll('#winSel button').forEach((x) => x.setAttribute('aria-selected', x === b));

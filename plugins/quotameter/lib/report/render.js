@@ -41,6 +41,7 @@ export function renderText(s) {
   }
   lines.push(row('5-hour', s.windows.h5));
   lines.push(row('Weekly', s.windows.wk));
+  if (s.windows.fable) lines.push(row('Fable', s.windows.fable) + '  (up to 50% of the week)');
   const a = s.attribution.h5;
   if (a) lines.push(`5-hour split (% of the limit): CLI ${a.cli}% · Desktop agent ${a.desktop}% · headless+other ${(a.headless + a.unitemised).toFixed(1)}%${a.remote ? ` · other computers ${a.remote}%` : ''} · chat and other devices ~${a.chat}% (estimated)`);
   for (const m of (s.sources.machines || []).filter((x) => x.error)) lines.push(`Other computer ${m.name}: ${m.error}, so its usage counts as chat for now.`);
