@@ -149,7 +149,7 @@ function sessionCost(list, k, windows) {
     res.left = { quick: quick > 0 ? Math.floor(room / (quick * k.h5)) : null, typical: Math.floor(room / (med * k.h5)), heavy: heavy > 0 ? Math.floor(room / (heavy * k.h5)) : 0, room };
   }
   const wk = windows.wk;
-  if (wk && k.wk && med > 0) res.leftWeek = { typical: Math.floor(Math.max(0, 100 - wk.pct) / (med * k.wk)), heavy: Math.floor(Math.max(0, 100 - wk.pct) / (heavy * k.wk)) };
+  if (wk && k.wk && med > 0) res.leftWeek = { typical: Math.floor(Math.max(0, 100 - wk.pct) / (med * k.wk)), heavy: heavy > 0 ? Math.floor(Math.max(0, 100 - wk.pct) / (heavy * k.wk)) : 0 };
   return res;
 }
 

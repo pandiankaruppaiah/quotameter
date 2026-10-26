@@ -14,10 +14,8 @@ import { quotameterHome, claudeProjectsDir, desktopDataDirs } from '../lib/paths
 import { readAll, withLock, drainLive, writeK, readK, PRIVATE } from '../lib/store.js';
 import { redact } from '../lib/model/redact.js';
 import { compact, MIN_KEEP_DAYS } from '../lib/model/retention.js';
-import { setup, describe, refreshLauncher } from '../lib/setup.js';
+import { setup, describe } from '../lib/setup.js';
 import { promptHook, latestReadings } from '../lib/warn.js';
-import { startMessages } from '../lib/digest.js';
-import { guardDecision } from '../lib/guard.js';
 import { alarm } from '../lib/notify.js';
 import { teamDigest, readDigests, teamReport } from '../lib/team.js';
 
@@ -126,54 +124,15 @@ async function buildSummary({ poll, context = false } = {}) {
   return summary;
 }
 
-// Hook stdin, parsed. Only the session start hook (event type, resume cache
-// fields) and the file guard (the Read call's file path) look at it; the
-// prompt hook never does. Nothing read here is stored.
-function hookInput() {
-  try {
-    return JSON.parse(fs.readFileSync(0, 'utf8'));
-  } catch {
-    return {};
-  }
-}
+
 
 async function main() {
   switch (cmd) {
     case 'hook': {
-      // We only need to know the hook fired, so stdin is not read, not even
-      // for the prompt hook: the prompt text never reaches quotameter.
-      try {
-        refreshLauncher(pluginRoot);
-      } catch {}
-      if (args[0] === 'prompt') {
-        const r = promptHook(loadConfig());
-        if (r.poll) detached('ingest', '--quiet');
-        if (r.alarm) detached('alarm', new Date(r.alarm.at).toISOString(), '--window', r.alarm.kind);
-        // systemMessage is shown to the user; additionalContext goes to the
-        // assistant only, so it can go easy on quota by itself.
-        const context = [r.message, r.advice].filter(Boolean).join(' ');
-        const out = {};
-        if (r.message) out.systemMessage = r.message;
-        if (context) out.hookSpecificOutput = { hookEventName: 'UserPromptSubmit', additionalContext: context };
-        if (Object.keys(out).length) console.log(JSON.stringify(out));
-        return;
-      }
-      if (args[0] === 'pretool') {
-        const d = guardDecision(hookInput(), loadConfig(), readK());
-        if (d) console.log(JSON.stringify(d));
-        return;
-      }
-      if (args[0] === 'start') {
-        const input = hookInput();
-        detached('ingest', '--quiet');
-        let lines = [];
-        try {
-          lines = startMessages(input);
-        } catch {}
-        if (lines.length) console.log(JSON.stringify({ systemMessage: lines.join(' ') }));
-        return;
-      }
-      detached('ingest', '--quiet', ...(args[0] === 'stop' ? ['--no-poll'] : []));
+      // Hooks live in hook.js (lean imports). Kept for anyone still calling
+      // "quotameter hook <event>" from an older hooks.json.
+      process.argv.splice(2, 1);
+      await import('./hook.js');
       return;
     }
     case 'ingest': {

@@ -30,14 +30,15 @@ const pct = (cost, k) => (k ? `${(cost * k).toFixed(cost * k >= 10 ? 0 : 1)}%` :
 // The newest finished interactive session with a Claude Code total.
 // A session is still running if the status line wrote its total in the last
 // two minutes, or if it is the session that is starting right now.
-function running(session, current, now) {
-  if (session === current) return true;
-  for (const r of readAll('live')) if (r.session === session && r.cost != null && now - Date.parse(r.ts) < 120000) return true;
-  return false;
+function runningSessions(current, now) {
+  const live = new Set(current ? [current] : []);
+  for (const r of readAll('live')) if (r.session && r.cost != null && now - Date.parse(r.ts) < 120000) live.add(r.session);
+  return live;
 }
 
 export function receipt(k, done, { redact = false, current = null, now = Date.now(), messages = null } = {}) {
-  const costs = readAll('costs').filter((c) => c.totalCost > 0 && !running(c.session, current, now));
+  const live = runningSessions(current, now);
+  const costs = readAll('costs').filter((c) => c.totalCost > 0 && !live.has(c.session));
   if (!costs.length) return null;
   const last = costs.reduce((a, b) => (Date.parse(b.ts) > Date.parse(a.ts) ? b : a));
   if (done.lastSession === last.session) return null;
