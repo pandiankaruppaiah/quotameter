@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { claudeConfigDir } from './paths.js';
 import { loadConfig, saveConfig } from './config.js';
-import { storePath, writeJsonAtomic, PRIVATE } from './store.js';
+import { storePath, writeJsonAtomic, renameRetry, PRIVATE } from './store.js';
 
 export const LAUNCHER = 'statusline.mjs';
 const BACKUP = 'settings.json.quotameter.bak';
@@ -150,7 +150,12 @@ export function setup(root, { dryRun = false, remove = false } = {}) {
   // Write beside the file and rename, so an interruption cannot leave it half written.
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  try {
+    renameRetry(tmp, file); // retries while Claude Code holds the file open on Windows
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   if (!remove) refreshLauncher(root);
   if (wrapCommand) wraps[key] = wrapCommand;
   else delete wraps[key];

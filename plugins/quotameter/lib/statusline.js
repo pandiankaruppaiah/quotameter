@@ -3,6 +3,7 @@
 // readings while a session is open. Never waits on the store lock.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { append, storePath, PRIVATE } from './store.js';
 import { loadConfig } from './config.js';
@@ -57,7 +58,9 @@ export function statusText(input) {
 // off after 3 seconds; one that never reads stdin must not take us down.
 function runWrapped(cmd, raw, timeoutMs = 3000) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, { shell: true, windowsHide: true });
+    // Its own process group on POSIX, so a timeout can kill the shell and
+    // whatever it started; on Windows taskkill /t does the same.
+    const child = spawn(cmd, { shell: true, windowsHide: true, detached: process.platform !== 'win32' });
     let out = '';
     let done = false;
     const finish = (text) => {
@@ -66,8 +69,16 @@ function runWrapped(cmd, raw, timeoutMs = 3000) {
       clearTimeout(timer);
       resolve(text);
     };
+    const killTree = () => {
+      try {
+        if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill();
+      }
+    };
     const timer = setTimeout(() => {
-      child.kill();
+      killTree();
       finish(out.trim());
     }, timeoutMs);
     child.stdout.on('data', (d) => (out += d));
@@ -80,7 +91,8 @@ function runWrapped(cmd, raw, timeoutMs = 3000) {
 
 // The command `quotameter setup` kept for this Claude Code profile.
 export function wrappedCommand(cfg = loadConfig()) {
-  return cfg.wrapCommands?.[claudeConfigDir()] || cfg.wrapCommand || null;
+  // Keyed the way setup.js stores it: the resolved config folder.
+  return cfg.wrapCommands?.[path.resolve(claudeConfigDir())] || cfg.wrapCommand || null;
 }
 
 export async function statusline({ wrap } = {}) {

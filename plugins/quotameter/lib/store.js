@@ -80,7 +80,7 @@ const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
 
 // On Windows a rename fails with EPERM or EBUSY while another process has
 // the target open, so retry briefly. Throws after about 5 seconds.
-function renameRetry(from, to) {
+export function renameRetry(from, to) {
   for (let i = 0; ; i++) {
     try {
       fs.renameSync(from, to);
