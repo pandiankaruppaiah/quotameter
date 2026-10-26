@@ -51,10 +51,11 @@ Not used in Phase 1: Desktop Local Storage (LevelDB, near auth data), the OAuth 
 plugins/quotameter/
   .claude-plugin/plugin.json
   bin/quotameter.js    CLI entry (also the npm `bin`)
-  lib/ingest/          log scanner, /usage poller, status line, Desktop reader, /context snapshot
+  lib/ingest/          log scanner, /usage poller, Desktop reader, /context snapshot
   lib/store.js         append-only JSONL files under ~/.quotameter
-  lib/model/           pricing table, calibration, attribution, forecasts
-  lib/report/          summary.json, HTML report, terminal summary
+  lib/model/           pricing and model registry, load, windows (calibration, attribution, forecast), breakdown, insights, retention, redact
+  lib/report/          report.js and format.js (the page), render.js (HTML and text), template.html
+  lib/statusline.js, lib/setup.js, lib/warn.js   status line, its installer, the prompt hook
   hooks/ skills/ agents/
 .claude-plugin/marketplace.json   points at ./plugins/quotameter
 package.json                      npm package; "bin" and "files" point into plugins/quotameter
@@ -151,12 +152,21 @@ Long-term views read summaries and raw rows together: tokens per week (12 weeks)
 ### Report
 
 - `quotameter report` writes `~/.quotameter/report.html` (single file, data embedded, no network) and opens it. `--json` prints `summary.json`. `--text` prints a short terminal table.
-- Layout follows `docs/sample-report.html`, approved by the project owner.
+- Layout follows `docs/sample-report.html`, approved by the project owner. The page script is `lib/report/report.js` plus the formatters in `lib/report/format.js` (shared with the text output); `render.js` embeds both as one inline module script, so `format.js` keeps its exports and a test compiles the result with `node --check`.
+- Tokens are quoted as fresh tokens (input, output, cache writes). Cache reads are listed in their own column and never extrapolated into "tokens left"; chat tokens are estimated with fresh tokens per list-price dollar, the same basis. The forecast is shown as a range when the recent pace and the window average differ by 2 points or more.
+- With no readings at all the page adds `no-readings` to `body`, which hides the meters, the line chart, the token table, the product stacks and the pattern tiles, and shows one card saying what already works, what needs readings and the poll error if there was one.
+- `quotameter status` builds the same summary and prints only the text, with no HTML and no browser.
 - `/quotameter:report` runs the CLI, then a Haiku subagent reads `summary.json` (never raw logs) and writes 5 to 8 plain findings into the report. The summary is opt-in per run because it spends quota.
 
-### Status line
+### Status line (`lib/statusline.js`, `lib/setup.js`)
 
-`quotameter statusline` prints e.g. `5h 17% (34% at 5:39pm) | wk 3%` and records the reading. If the user already has a status line command, `quotameter statusline --wrap "<cmd>"` runs theirs and appends ours.
+`quotameter statusline` prints e.g. `5h 17% (resets 5:39pm) | wk 3%` and records the reading once a minute (and the session's running cost every 15 seconds) into `live.jsonl`, without the lock. Before the first response it prints `5h -- | wk --`.
+
+`quotameter setup` installs it. The command written to `settings.json` is `node "~/.quotameter/statusline.mjs"`, a launcher, because Claude Code installs each plugin version in a new cache folder and a command pointing at the plugin would break at the next update. The launcher reads `launcher.json` (plugin roots keyed by Claude Code config folder, so `CLAUDE_CONFIG_DIR` profiles do not fight) and imports `lib/statusline.js` from a root whose `package.json` names the plugin. Every hook run refreshes `launcher.json` before doing anything else, so an update heals at the next session start. An existing status line command is kept in `config.json` as `wrapCommands[<config folder>]` and run by `statusline.js` the way Claude Code ran it (through a shell, cut off after 3 seconds, EPIPE ignored when it does not read stdin), which avoids quoting another command inside JSON. `setup` shows the change (`--dry-run`), copies `settings.json` to `settings.json.quotameter.bak` whenever it replaces a status line that is not its own (so the backup is always a state the user made), writes the file through a temp file and rename, treats an empty file as no settings, keeps other keys of the `statusLine` object, and `--remove` puts the previous command back rather than restoring the whole backup. The launcher trusts a root only if it is absolute, owned by the current user where the platform knows, and its `package.json` names the plugin; with several profiles recorded it uses only the matching one.
+
+### Prompt hook (`lib/warn.js`)
+
+`UserPromptSubmit` runs `hook prompt` on every prompt, so it reads the tails (64 KB) of `live.jsonl`, `livelog.jsonl` and `readings.jsonl` for the newest reading per window, with no lock and no analysis. If the newest reading and the newest poll attempt (`poll-attempt.stamp`, touched before every try) are both older than `pollIntervalMin` it detaches an ingest, which polls `/usage` (free, behind the poll lease); so a poll that keeps failing backs off like one that works. The 95 level is dropped when `warnAt` is set above it. If a window whose reset is still ahead is at or past `warnAt` (default 80) or 95, it prints `{"systemMessage": ...}`, which Claude Code shows to the user, plus the same text as `additionalContext` so the assistant can suggest a lighter model. One warning per window and level, remembered in `warned.json` (atomic write; a lost race means at worst a repeated warning). The hook never reads stdin: the prompt is not quotameter's business. A reading's age does not matter for the warning, only that its window has not reset, since the percentage cannot have gone down since.
 
 ## Privacy
 
@@ -263,6 +273,12 @@ agy reviewed the README, PRIVACY, CHANGELOG, CONTRIBUTING, manifests and the dra
 ### agy profile review 13 (2026-10-13), full text in `docs/reviews/agy-13-profile-review.md`
 
 The GitHub profile README now claims only what quotameter shows (Claude Code plugins, skills, hooks, subagents, MCP, cost engineering, tests and multi-model review) plus the role the owner gave (AI Tech Lead). Removed: Claude Agent SDK, Claude API, eval graders, "running AI in production", and the "any of my repositories" line. Points 6 to 9 referred to an earlier draft of the setup guide that had already been replaced.
+
+### agy product review 17 and 0.2.0 plan review 18 (2026-10-26), full text in `docs/reviews/agy-17-product-review.md` and `agy-18-plan-review.md`
+
+Review 17 asked what would make quotameter a plugin people keep. Its top findings, with the author's own store as evidence (13 days installed, 46 readings, status line never set up): readings arrive only if the optional status line is set up and that step is an LLM editing JSON; every question about tokens opened a browser; nothing warns before a limit; "tokens left" extrapolated cache reads; the first report was a page of "n/a". Shipped in 0.2.0: `setup` as a command with a launcher that survives plugin updates, `status`, the prompt hook (poll every 10 minutes while active, warn at 80 and 95), fresh-token accounting, the forecast range, `mark code-only`, the MCP tip split into local servers and claude.ai connectors, the onboarding card, the module split, one model registry and the page script under test. Declined: dropping retention (tested and the reason the 90-day view exists), dropping the plan value card (reworded instead), an in-report "mark code-only" button (a static file cannot run commands; the calibration line names the command), a new weighting formula (nothing better exists until Anthropic documents the limits), an export command (`report --share --text` and `--json` cover it). The heatmap moved into Technical details rather than being removed.
+
+Review 18 checked the plan. Accepted: the launcher imports only from a root whose `package.json` names the plugin; roots are keyed by Claude Code config folder; the backup is taken before every change (not once) and `--remove` restores the entry surgically; the page runs as an inline module script instead of stripping `export` with a regex; a Windows-path test and a platform-neutral `folderName`. Confirmed: `systemMessage` with exit 0 is shown to the user; the background poll spends no quota and cannot loop (poll lease). Code review 19 (`docs/reviews/agy-19-code-review.md`) found 14 issues, all taken: EPIPE and a timeout on the wrapped command, back-off after failed polls, `warnAt` above 95, normalised launcher keys with no fallback across profiles, per-profile wrapped commands, fresh tokens in every row that sits beside the chat row, a stronger launcher trust check, an empty `settings.json`, atomic settings writes, the backup rule above, skill wording, and two tests that did not test what they claimed. Declined: draining stdin in the prompt hook (the existing hooks have never read it and Claude Code copes; the privacy claim is worth more), a visible diagnostic for a missing `node` (the hook itself cannot run without it; the README and the skills cover it), caching the Windows `claude.cmd` resolution (one extra spawn per poll, in the background).
 
 ### agy security and privacy review 15 (2026-10-14), full text in `docs/reviews/agy-15-security.md`
 

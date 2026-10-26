@@ -112,6 +112,11 @@ export async function runLocalCommand(name, { timeoutMs = 60000 } = {}) {
   let res = await run(cmd, args, { cwd, timeoutMs, useCmd: false });
   if (res.error && windowsCmdFallback) res = await run(cmd, args, { cwd, timeoutMs, useCmd: true });
   if (res.error) return { ok: false, error: `could not run claude: ${res.error.message}` };
+  // cmd.exe reports a missing command as an exit code, not an error.
+  if (res.code !== 0 && !res.stdout.trim()) {
+    const first = res.stderr.trim().split(String.fromCharCode(10))[0]?.trim() || 'no output';
+    return { ok: false, error: `could not run claude (exit ${res.code}): ${first.slice(0, 160)}` };
+  }
   let json;
   try {
     json = JSON.parse(res.stdout.trim().split('\n').pop());

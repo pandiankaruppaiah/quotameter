@@ -3,6 +3,9 @@
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook start", "timeout": 10 } ] }
     ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook prompt", "timeout": 10 } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/quotameter.js\" hook stop", "timeout": 10 } ] }
     ],

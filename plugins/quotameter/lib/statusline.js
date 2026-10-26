@@ -5,6 +5,8 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { append, storePath, PRIVATE } from './store.js';
+import { loadConfig } from './config.js';
+import { claudeConfigDir } from './paths.js';
 
 function clock(epochSec) {
   return new Date(epochSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase();
@@ -46,18 +48,39 @@ export function statusText(input) {
   const w = rl.seven_day;
   if (typeof h?.used_percentage === 'number') parts.push(`5h ${Math.round(h.used_percentage)}%${h.resets_at ? ` (resets ${clock(h.resets_at)})` : ''}`);
   if (typeof w?.used_percentage === 'number') parts.push(`wk ${Math.round(w.used_percentage)}%`);
-  return parts.length ? parts.join(' | ') : 'quotameter: waiting for first response';
+  // Before the first response Claude Code sends no limits yet.
+  return parts.length ? parts.join(' | ') : '5h -- | wk --';
 }
 
-function runWrapped(cmd, raw) {
+// The user's own status line command, run the way Claude Code would run it:
+// through a shell, with the same JSON on stdin. A command that hangs is cut
+// off after 3 seconds; one that never reads stdin must not take us down.
+function runWrapped(cmd, raw, timeoutMs = 3000) {
   return new Promise((resolve) => {
     const child = spawn(cmd, { shell: true, windowsHide: true });
     let out = '';
+    let done = false;
+    const finish = (text) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(text);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(out.trim());
+    }, timeoutMs);
     child.stdout.on('data', (d) => (out += d));
-    child.on('error', () => resolve(''));
-    child.on('close', () => resolve(out.trim()));
+    child.on('error', () => finish(''));
+    child.on('close', () => finish(out.trim()));
+    child.stdin.on('error', () => {}); // EPIPE when the command exits without reading
     child.stdin.end(raw);
   });
+}
+
+// The command `quotameter setup` kept for this Claude Code profile.
+export function wrappedCommand(cfg = loadConfig()) {
+  return cfg.wrapCommands?.[claudeConfigDir()] || cfg.wrapCommand || null;
 }
 
 export async function statusline({ wrap } = {}) {
@@ -74,6 +97,14 @@ export async function statusline({ wrap } = {}) {
     record(input);
   } catch {}
   const ours = statusText(input);
-  const theirs = wrap ? await runWrapped(wrap, raw) : '';
+  // `quotameter setup` keeps a wrapped command in config.json rather than on
+  // the command line, so nothing needs quoting inside settings.json.
+  let wrapped = wrap;
+  if (!wrapped) {
+    try {
+      wrapped = wrappedCommand();
+    } catch {}
+  }
+  const theirs = wrapped ? await runWrapped(wrapped, raw) : '';
   process.stdout.write(theirs ? `${theirs} | ${ours}` : ours);
 }

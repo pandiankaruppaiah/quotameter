@@ -7,8 +7,8 @@
 // can be null before the first calibration; every stat then falls back to
 // dollars or tokens and says so.
 
-import path from 'node:path';
 import { costOf, priceFor } from './pricing.js';
+import { folderName } from './breakdown.js';
 import { HOUR, DAY, sum, tokensOf, round, percentile } from './util.js';
 
 const ACTIVE_GAP = 15 * 60000; // a pause longer than this ends an active stretch
@@ -354,7 +354,7 @@ function contextGrowth(msgs) {
 function branches(msgs, kWk) {
   const by = new Map();
   for (const m of msgs) {
-    const project = m.cwd ? path.basename(m.cwd.replace(/[\\/]+$/, '')) : 'unknown';
+    const project = m.cwd ? folderName(m.cwd) : 'unknown';
     const branch = m.branch && m.branch !== 'HEAD' ? m.branch : null;
     const key = `${project}|${branch || ''}`;
     const g = by.get(key) || { project, branch, cost: 0, tokens: 0, sessions: new Set() };

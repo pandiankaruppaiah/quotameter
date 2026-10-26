@@ -123,7 +123,7 @@ test('report escapes data so a title cannot break out of the script tag', () => 
 test('status line text', () => {
   const t = statusText({ rate_limits: { five_hour: { used_percentage: 17.4, resets_at: 1791873600 }, seven_day: { used_percentage: 3 } } });
   assert.match(t, /^5h 17% \(resets .+\) \| wk 3%$/);
-  assert.equal(statusText({}), 'quotameter: waiting for first response');
+  assert.equal(statusText({}), '5h -- | wk --');
 });
 
 test('no em dashes anywhere in shipped files', () => {
@@ -425,4 +425,165 @@ test('a lease is only released by the process that holds it', async () => {
   assert.ok(fs.existsSync(storePath('race.lease')), 'the newer lease survives');
   second();
   assert.ok(!fs.existsSync(storePath('race.lease')));
+});
+
+// ---------- 0.2.0 ----------
+
+const pluginRoot = path.resolve('plugins/quotameter');
+
+test('setup: installs the launcher, keeps an existing status line, removes cleanly', async () => {
+  const { setup, settingsFile, launcherPath, isOurs } = await import('../plugins/quotameter/lib/setup.js');
+  const { loadConfig } = await import('../plugins/quotameter/lib/config.js');
+  fs.writeFileSync(settingsFile(), JSON.stringify({ model: 'opus', statusLine: { type: 'command', command: 'echo mine', padding: 1 } }));
+  const dry = setup(pluginRoot, { dryRun: true });
+  assert.equal(dry.changed, true);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')).statusLine.command, 'echo mine', 'a dry run changes nothing');
+  setup(pluginRoot);
+  const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+  assert.equal(s.model, 'opus', 'other settings survive');
+  assert.ok(isOurs(s.statusLine.command) && s.statusLine.command.includes('statusline.mjs'));
+  assert.equal(s.statusLine.padding, 1, 'other statusLine keys survive');
+  const profile = path.resolve(process.env.CLAUDE_CONFIG_DIR);
+  assert.equal(loadConfig().wrapCommands[profile], 'echo mine', 'the old command moves to config, not the command line');
+  assert.ok(fs.existsSync(launcherPath()));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(launcherPath()), 'launcher.json'), 'utf8')).roots[profile], pluginRoot);
+  assert.match(fs.readFileSync(path.join(path.dirname(settingsFile()), 'settings.json.quotameter.bak'), 'utf8'), /echo mine/);
+  assert.equal(setup(pluginRoot).changed, false, 'running it again is a no-op');
+  const removed = setup(pluginRoot, { remove: true });
+  assert.equal(removed.changed, true);
+  const s2 = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+  assert.deepEqual(s2.statusLine, { type: 'command', command: 'echo mine', padding: 1 });
+  assert.equal(loadConfig().wrapCommands, undefined);
+  // An empty settings.json counts as no settings, and the backup is the user's own state.
+  fs.writeFileSync(settingsFile(), '');
+  setup(pluginRoot);
+  assert.ok(isOurs(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')).statusLine.command));
+  assert.equal(fs.readFileSync(path.join(path.dirname(settingsFile()), 'settings.json.quotameter.bak'), 'utf8'), '');
+  setup(pluginRoot, { remove: true });
+  // With no previous status line, remove deletes the entry.
+  fs.writeFileSync(settingsFile(), JSON.stringify({ model: 'opus' }));
+  setup(pluginRoot);
+  setup(pluginRoot, { remove: true });
+  assert.equal('statusLine' in JSON.parse(fs.readFileSync(settingsFile(), 'utf8')), false);
+});
+
+test('setup: the launcher runs the installed plugin and prints both limits', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { setup, launcherPath } = await import('../plugins/quotameter/lib/setup.js');
+  setup(pluginRoot);
+  const input = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 42, resets_at: 1791873600 }, seven_day: { used_percentage: 7 } } });
+  const out = execFileSync(process.execPath, [launcherPath()], { input, encoding: 'utf8', env: process.env });
+  assert.match(out, /5h 42% \(resets .+\) \| wk 7%/);
+  // A folder whose package.json is not this plugin is refused, even with a statusline.js in it.
+  const other = path.join(fs.mkdtempSync(path.join(home, 'other-')), 'plugin');
+  fs.mkdirSync(path.join(other, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify({ name: 'other-plugin', type: 'module' }));
+  fs.writeFileSync(path.join(other, 'lib', 'statusline.js'), 'export const statusline = () => process.stdout.write("hijacked");');
+  fs.writeFileSync(path.join(path.dirname(launcherPath()), 'launcher.json'), JSON.stringify({ roots: { [path.resolve(process.env.CLAUDE_CONFIG_DIR)]: other } }));
+  const refused = execFileSync(process.execPath, [launcherPath()], { input, encoding: 'utf8', env: process.env });
+  assert.match(refused, /plugin not found/);
+  assert.ok(!refused.includes('hijacked'));
+  setup(pluginRoot, { remove: true });
+});
+
+test('warnings: once per window and level, nothing when off or after reset', async () => {
+  const { warningFor, promptHook } = await import('../plugins/quotameter/lib/warn.js');
+  const { append } = await import('../plugins/quotameter/lib/store.js');
+  const now = Date.parse('2026-10-20T10:00:00Z');
+  const latest = { session: { ts: iso(now - 60000), percent: 85, resetsAt: iso(now + 2 * H) }, weekly_all: { ts: iso(now - 60000), percent: 50, resetsAt: iso(now + 48 * H) } };
+  const w = warningFor(latest, { warnAt: 80 }, now, []);
+  assert.match(w.message, /5-hour limit at 85%, resets in 2 h 0 m/);
+  assert.ok(!/weekly/.test(w.message));
+  assert.equal(warningFor(latest, { warnAt: 80 }, now, w.keys), null, 'not twice for the same window and level');
+  latest.session.percent = 96;
+  assert.match(warningFor(latest, { warnAt: 80 }, now, w.keys).message, /96%/, 'a new level fires again');
+  assert.equal(warningFor(latest, { warnAt: 0 }, now, []), null, 'warnAt 0 turns it off');
+  latest.session.resetsAt = iso(now - 1);
+  assert.equal(warningFor(latest, { warnAt: 80 }, now, []), null, 'a window that reset is not warned about');
+  // Through a store of its own: a fresh reading means no poll, and the warning is remembered.
+  const saved = process.env.QUOTAMETER_HOME;
+  process.env.QUOTAMETER_HOME = path.join(fs.mkdtempSync(path.join(home, 'warn-')), 'store');
+  try {
+    append('live', [{ ts: new Date().toISOString(), source: 'statusline', kind: 'session', group: 'session', percent: 91, resetsAt: iso(Date.now() + H) }]);
+    const first = promptHook({ warnAt: 80, pollIntervalMin: 10 });
+    assert.equal(first.poll, false);
+    assert.match(first.message, /91%/);
+    assert.equal(promptHook({ warnAt: 80, pollIntervalMin: 10 }).message, null);
+  } finally {
+    process.env.QUOTAMETER_HOME = saved;
+  }
+});
+
+test('tokens left are fresh tokens: cache reads are listed, never extrapolated', async () => {
+  const now = Date.parse('2026-12-01T03:00:00Z');
+  const reset = now + 2 * H, start = reset - 5 * H;
+  writeLog(home, 'p-fresh', 'f.jsonl', [
+    assistant({ id: 'f1', session: 'sf', ts: iso(start + H), u: usage({ input: 1000, output: 1000, read: 2000000 }) }),
+    usageRecord({ ts: iso(start + 1.5 * H), fivePct: 50, weekPct: 5, fiveReset: iso(reset), weekReset: iso(now + 3 * 24 * H) }),
+  ]);
+  await ingest({ poll: false });
+  const s = analyze({ now, config: { plan: 'pro', codeOnlyWindows: [] } });
+  const w = s.windows.h5;
+  assert.equal(w.tokensCacheRead, 2000000);
+  assert.equal(w.tokensFresh, 2000);
+  assert.ok(w.tokensLeft < 20000, `tokens left was ${w.tokensLeft}, cache reads must not inflate it`);
+  assert.equal(s.breakdown.h5.tiles.freshTokens, 2000);
+  assert.equal(s.breakdown.h5.projects[0].tokens, 2000, 'rows beside the chat row use fresh tokens too');
+  // A window marked code-only counts as clean for calibration.
+  const marked = analyze({ now, config: { plan: 'pro', codeOnlyWindows: [reset] } });
+  assert.equal(marked.calibration.h5.marked, 1);
+  assert.ok(marked.calibration.h5.cleanWindows >= 1, 'a marked window is clean whatever else happened in it');
+});
+
+test('mark code-only: records the current window in config', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { append } = await import('../plugins/quotameter/lib/store.js');
+  const { loadConfig } = await import('../plugins/quotameter/lib/config.js');
+  const saved = process.env.QUOTAMETER_HOME;
+  process.env.QUOTAMETER_HOME = path.join(fs.mkdtempSync(path.join(home, 'mark-')), 'store');
+  try {
+    const resets = iso(Math.round((Date.now() + 3 * H) / 60000) * 60000);
+    append('live', [{ ts: new Date().toISOString(), source: 'statusline', kind: 'session', group: 'session', percent: 20, resetsAt: resets }]);
+    const cli = path.join(pluginRoot, 'bin', 'quotameter.js');
+    assert.match(execFileSync(process.execPath, [cli, 'mark', 'code-only'], { encoding: 'utf8', env: process.env }), /Marked the 5-hour window/);
+    assert.deepEqual(loadConfig().codeOnlyWindows, [Date.parse(resets)]);
+    execFileSync(process.execPath, [cli, 'mark', 'code-only', '--undo'], { encoding: 'utf8', env: process.env });
+    assert.deepEqual(loadConfig().codeOnlyWindows, []);
+  } finally {
+    process.env.QUOTAMETER_HOME = saved;
+  }
+});
+
+test('claude.ai connectors are told apart from local MCP servers', async () => {
+  const { isConnector } = await import('../plugins/quotameter/lib/model/analyze.js');
+  assert.ok(isConnector('claude_ai_Vercel') && isConnector('claude.ai TomTom Maps'));
+  assert.ok(!isConnector('github') && !isConnector('my-claude-ai-notes'));
+});
+
+test('a Windows project path gives the same project name on every platform', async () => {
+  const { folderName } = await import('../plugins/quotameter/lib/model/breakdown.js');
+  assert.equal(folderName('C:\\Users\\dev\\My Projects\\app\\'), 'app');
+  assert.equal(folderName('/home/dev/app'), 'app');
+  assert.equal(folderName('\\\\server\\share\\repo'), 'repo');
+});
+
+test('the report page script compiles, and a report without readings explains itself', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { pageScript, renderText } = await import('../plugins/quotameter/lib/report/render.js');
+  const empty = fs.mkdtempSync(path.join(home, 'empty-'));
+  const saved = { home: process.env.QUOTAMETER_HOME, cfg: process.env.CLAUDE_CONFIG_DIR };
+  process.env.QUOTAMETER_HOME = path.join(empty, 'store');
+  process.env.CLAUDE_CONFIG_DIR = path.join(empty, 'claude');
+  try {
+    const s = analyze({ pollError: 'could not run claude: ENOENT' });
+    assert.equal(s.windows.h5, null);
+    assert.match(renderText(s), /No limit readings yet/);
+    assert.match(renderText(s), /ENOENT/);
+    const file = path.join(empty, 'page.mjs');
+    fs.writeFileSync(file, pageScript(s));
+    execFileSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  } finally {
+    process.env.QUOTAMETER_HOME = saved.home;
+    process.env.CLAUDE_CONFIG_DIR = saved.cfg;
+  }
 });

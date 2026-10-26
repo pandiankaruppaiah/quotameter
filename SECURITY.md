@@ -11,7 +11,9 @@ Do not attach your `~/.quotameter` files, reports or Claude Code logs; they cont
 - Runs locally. No network requests of its own, no telemetry, no dependencies.
 - Reads Claude Code's logs and keeps token counts and metadata; never stores message text, thinking, tool inputs or tool results.
 - Never opens credentials, OAuth tokens, cookies or browser storage contents.
-- Starts only the `claude` command, with fixed arguments and without a shell. The status line's `--wrap` option runs the command you already configured in your own Claude Code settings.
+- Starts only the `claude` command, with fixed arguments and without a shell. If you already had a status line command, `quotameter setup` keeps it in quotameter's config and runs it the way Claude Code did, through a shell; quotameter never adds a command of its own.
+- `quotameter setup` is the only thing that writes outside `~/.quotameter`: the `statusLine` entry in Claude Code's `settings.json`, after showing you the change and taking a backup. The status line launcher it installs imports code only from a folder whose `package.json` names this plugin.
+- Hooks never read their input, so prompt text never reaches quotameter.
 - Keeps its data readable only by you on macOS and Linux.
 
 See [PRIVACY.md](PRIVACY.md) for exactly what is read and kept.

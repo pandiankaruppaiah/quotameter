@@ -8,7 +8,8 @@ quotameter runs entirely on your computer.
 - **Session titles.** Claude Code writes a short title for each session, usually from your first prompt, so a title can contain words you typed. quotameter keeps it to name sessions in your report. `redactPaths` turns this off.
 - The output of `claude -p /usage` and `claude -p /context`, which Claude Code runs locally.
 - Claude Desktop's `plan-usage-history.json`, and the last-modified time (not the contents) of Desktop's web storage folders, used as a sign that the Chat tab was in use.
-- The JSON Claude Code sends to the status line, if you enable it.
+- The JSON Claude Code sends to the status line, if you enable it: the two percentages, reset times and the session's running cost.
+- The prompt hook runs when you send a prompt. It does not read the prompt (it never reads its input at all); it only checks the newest stored reading and, when a limit is close, prints one line for Claude Code to show you.
 
 ## What it never stores
 
@@ -35,6 +36,7 @@ Raw rows are kept for 90 days (`keepDays`). Older days are summarised and the ra
 ## Options
 
 - `quotameter config redactPaths true` stores project folders as a short hash and stops storing branch names and session titles. Titles stored before you turned it on are hidden in the report as well.
+- `quotameter setup` edits `~/.claude/settings.json` to add the status line. Before it replaces a status line that is not its own it copies the file to `settings.json.quotameter.bak`, and `setup --remove` puts back what was there.
 - Delete `~/.quotameter` to remove all data.
 
 ## Optional AI summary

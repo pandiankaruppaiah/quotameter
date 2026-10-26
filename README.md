@@ -6,7 +6,7 @@
 
 See where your Claude Pro or Max quota goes: Claude Code, Claude Desktop and claude.ai, in one local report.
 
-Anthropic shows you two percentages, the 5-hour window and the week. quotameter shows what used them: which product, model, subagent, project, session, skill, tool and MCP server. It estimates how much went to chat, tells you how many more sessions fit before the limit, forecasts when you will hit it, and suggests what to change. Everything stays on your computer.
+Anthropic shows you two percentages, the 5-hour window and the week. quotameter answers the questions behind them: will I hit the limit before it resets, how many more sessions fit, and what used it (which product, model, subagent, project, session, skill, tool and MCP server, with chat estimated). It warns you in Claude Code before a limit hits, and everything stays on your computer.
 
 ![quotameter report](docs/screenshot.png)
 
@@ -59,14 +59,15 @@ claude plugin install quotameter@quotameter
 Restart Claude Code, then:
 
 ```
-/quotameter:report
+/quotameter:setup
+/quotameter:status
 ```
 
-The plugin adds hooks that record usage at the start and end of each session, so the report gets better the longer it is installed.
+`/quotameter:setup` adds a status line that shows `5h 17% (resets 5:39pm) | wk 3%` and records a reading every minute while you work. It shows you the change to `~/.claude/settings.json` first, keeps a backup, and keeps your existing status line if you have one. Do this step: every estimate in the report is built from these readings.
 
-Optional: `/quotameter:setup` adds a status line that shows `5h 17% (resets 5:39pm) | wk 3%` and records a reading every minute while you work. It asks before changing `~/.claude/settings.json`, and keeps your existing status line if you have one.
+`/quotameter:status` answers in the terminal: both limits, where your pace ends up, sessions left. `/quotameter:report` opens the full report. The plugin's hooks record usage at the start and end of each session and take a free `/usage` reading every ten minutes while you work, and they warn you once when a limit passes 80% and again at 95%.
 
-To check what quotameter can see on your computer, run `npx github:pandiankaruppaiah/quotameter doctor` in a terminal.
+To check what quotameter can see on your computer, run `npx github:pandiankaruppaiah/quotameter doctor` in a terminal. It also says whether the status line is set up.
 
 ### Without the plugin
 
@@ -108,19 +109,21 @@ In Claude Code:
 
 Or from a terminal, the same commands with `claude plugin` in place of `/plugin`.
 
-If you ran `/quotameter:setup`, remove or restore the `statusLine` entry in `~/.claude/settings.json`. Delete `~/.quotameter` to remove all collected data.
+If you ran `/quotameter:setup`, run `/quotameter:setup remove` first (or `quotameter setup --remove` in a terminal); it restores the status line you had before. Delete `~/.quotameter` to remove all collected data.
 
 ## What the report shows
 
-**Right now.** Both limits as meters with one plain sentence each: how much is used, when it resets, where your current pace ends up, and how many more sessions like your usual ones fit.
+**Right now.** Both limits as meters with one plain sentence each: how much is used, when it resets, where your current pace ends up (as a range when your recent pace and the window average disagree), and how many more sessions like your usual ones fit. Tokens are quoted as fresh tokens (input, output, cache writes); cache reads are listed but never extrapolated, so a new session is not promised tokens it does not have.
 
 **What used your limit.** Each window split into Claude Code, Desktop agent sessions, headless runs and estimated chat. Then a breakdown for the 5-hour window, this week, 30 days or 90 days: models (main conversation and subagents), projects and branches, your most expensive sessions, subagents, skills, tools, MCP servers and plugins.
 
 **Make it last longer.** Recommendations from your own data, what this week's Opus work would have cost on Sonnet or Haiku, your plan's API-equivalent value, and a verdict on whether your plan fits.
 
-**Your patterns.** What a typical session costs, which limit actually stops you, allowance that reset unused, burn rate while working, when you hit the limit, this week against last week, the last 12 weeks (as % of limit, tokens, or tokens with cache reads), Claude Code and chat by day, and when in the week you work.
+**Your patterns.** What a typical session costs, which limit actually stops you, allowance that reset unused, burn rate while working, when you hit the limit, this week against last week, the last 12 weeks (as % of limit, tokens, or tokens with cache reads), and Claude Code and chat by day.
 
-**Technical details** (collapsed). Prompt cache hit rate and the cost of rebuilding it after pauses, subagent overhead, context growth per turn, and session length.
+**Technical details** (collapsed). Prompt cache hit rate and the cost of rebuilding it after pauses, subagent overhead, context growth per turn, session length, and when in the week you use Claude Code.
+
+With no limit readings yet, the report says so in one card, explains what already works and what needs readings, and hides the parts that would only show "n/a".
 
 Ask `/quotameter:report` for an analysis and a Haiku subagent adds a few plain findings. That part uses a little quota, so it only runs when you ask.
 
@@ -133,13 +136,14 @@ Everything comes from files and commands already on your computer.
 | `claude -p /usage` | 5-hour and weekly %, reset times | Free: a local command, no model call |
 | Claude Code session logs | Tokens per response, model, project, subagent, skill, tools | Free |
 | Claude Code `cost-state` records | Each session's true total, used to correct the logs | Free |
-| Status line (optional) | A reading every minute while you work | Free |
+| Status line (`/quotameter:setup`) | A reading every minute while you work | Free |
+| Prompt hook | A free `/usage` reading every 10 minutes while you work, and the limit warning | Free, reads nothing from your prompt |
 | `claude -p /context` | What each MCP server and plugin adds to every session | Free |
 | Claude Desktop usage history | Extra % readings | Free |
 
 **Chat and other devices.** claude.ai and Desktop Chat keep no local usage logs. quotameter learns how many percentage points your Claude Code usage normally costs, and reports the part of the percentage that Claude Code on this computer does not explain. That includes claude.ai, the Desktop Chat tab, the mobile app and Claude Code on your other computers. Increases while Claude Code here was idle count directly. Estimates settle after about five 5-hour windows.
 
-**Calibration.** Usage is weighted by API list price as a stand-in, because Anthropic does not publish how limits are counted. quotameter learns the scale from your own windows.
+**Calibration.** Usage is weighted by API list price as a stand-in, because Anthropic does not publish how limits are counted. quotameter learns the scale from your own windows. If you know a window had no chat at all, `quotameter mark code-only` tells calibration to trust it fully.
 
 **Logs undercount.** Claude Code's per-response logs miss the final output of tool-calling turns and some background calls. quotameter scales each session to Claude Code's own total and shows the gap as "not itemised", so totals are right even where the breakdown cannot be.
 
@@ -152,7 +156,7 @@ quotameter keeps its own copy of your usage, so history outlives Claude Code's l
 - The last 90 days are kept in full. Change it with `quotameter config keepDays 120` (at least 35).
 - Older days are summarised before the raw rows go: tokens and cost by model, project, product, subagent and skill, plus each limit window's peak, chat estimate and weekly totals. Summaries hold no message text, session titles or session ids.
 - The 90-day view is always there, with a note on how many days it covers so far. "All history" appears once there is more than 90 days.
-- Limit percentages are only recorded while quotameter runs, so they start on the day you install it.
+- Limit percentages are only recorded while quotameter runs, so they start on the day you install it. The status line records one a minute; without it, hooks record one every ten minutes while you work.
 - For deeper raw logs as well, raise `cleanupPeriodDays` in `~/.claude/settings.json`.
 
 ## Privacy
@@ -169,21 +173,26 @@ Details in [PRIVACY.md](PRIVACY.md). To report a security problem, see [SECURITY
 ## Commands and settings
 
 ```
+quotameter status [--no-poll]                      both limits, the split and sessions left, no browser
 quotameter report [--text | --json] [--no-open]   build the report and open it (default)
 quotameter report --share                          a copy without project names, branches or titles
+quotameter setup [--dry-run | --remove]            put the status line into Claude Code's settings
 quotameter poll                                    read the 5-hour and weekly % now
+quotameter mark code-only [--week] [--undo]        this window had no chat: trust it for calibration
 quotameter context                                 snapshot MCP and plugin overhead
-quotameter statusline [--wrap "<your command>"]    status line for Claude Code
 quotameter compact                                 summarise and prune rows older than keepDays now
 quotameter config [key] [value]                    show all settings, one setting, or change one
 quotameter doctor                                  check what quotameter can see
 ```
+
+In Claude Code: `/quotameter:status`, `/quotameter:report`, `/quotameter:setup`.
 
 | Setting | Default | |
 |---|---|---|
 | `plan` | `pro` | `pro`, `max5` or `max20`; used for plan value and the plan verdict |
 | `keepDays` | `90` | Days of raw data to keep before summarising (at least 35) |
 | `pollIntervalMin` | `10` | Minutes between free `/usage` readings taken by hooks |
+| `warnAt` | `80` | The prompt hook warns once when a limit reaches this percentage, and again at 95. `0` turns warnings off |
 | `redactPaths` | `false` | Hash project folders, drop branch names and session titles |
 
 ## Troubleshooting
@@ -193,9 +202,11 @@ Start with `quotameter doctor` (or `npx github:pandiankaruppaiah/quotameter doct
 | Symptom | What to do |
 |---|---|
 | `node: command not found` in a hook | Install Node 18+ (see [Requirements](#requirements)) and restart Claude Code. |
-| "No limit readings yet" | Run `quotameter poll`, or use Claude Code for a few minutes with the plugin installed. |
+| "No limit readings yet" | Run `quotameter poll`, or use Claude Code for a few minutes with the plugin installed. `/quotameter:setup` records one a minute. |
 | "Poll failed" | Check that `claude` runs in a terminal and you are signed in. Set `QUOTAMETER_CLAUDE_BIN` if `claude` is not on your `PATH`. |
-| Chat share looks high | It is an estimate. It settles after about five 5-hour windows, and includes Claude Code on your other computers. |
+| Chat share looks high | It is an estimate. It settles after about five 5-hour windows, and includes Claude Code on your other computers. If you know the current window had no chat, run `quotameter mark code-only`. |
+| Status line says "plugin not found" | Start one Claude Code session so the plugin's hook records where it is installed, or run `/quotameter:setup` again. |
+| No warning appeared near the limit | Warnings need a reading from the current window; the status line gives one every minute. Check `quotameter config warnAt`. |
 | Report does not open | It is saved at `~/.quotameter/report.html` (`%USERPROFILE%\.quotameter\report.html` on Windows); open it yourself. On WSL, open it from Windows. |
 | Desktop not found | Desktop is optional. The Microsoft Store and the direct-download versions are both supported. |
 
@@ -207,7 +218,6 @@ Start with `quotameter doctor` (or `npx github:pandiankaruppaiah/quotameter doct
 
 ## Roadmap
 
-- **Sharper chat estimates** from more frequent readings.
 - **Antigravity**, as a second tool alongside Claude.
 - Learned per-token-type weights instead of list price, and tool costs weighted by result size.
 

@@ -1,28 +1,30 @@
 ---
 name: setup
-description: Set up quotameter's status line so Claude Code shows 5-hour and weekly quota use and quotameter records readings during sessions. Use when the user runs /quotameter:setup or asks to show quota in the status line.
+description: Set up quotameter's status line so Claude Code shows 5-hour and weekly quota use and quotameter records readings during sessions. Use when the user runs /quotameter:setup or asks to show quota in the status line. Also handles removal (/quotameter:setup remove).
 ---
 
 # quotameter setup
 
 The CLI lives two folders up from this skill's base directory: `<base>/../../bin/quotameter.js`.
 
-1. Read the user's `~/.claude/settings.json`. Look at the `statusLine` setting.
-2. Explain what will change and ask for confirmation before editing.
-3. If there is no `statusLine`, set:
+1. Show what would change, without changing anything:
 
-   ```json
-   "statusLine": { "type": "command", "command": "node \"<absolute path to bin/quotameter.js>\" statusline" }
+   ```
+   node "<base>/../../bin/quotameter.js" setup --dry-run
    ```
 
-   If there already is one with a `command`, keep it by wrapping it:
+   Show the user that output: the settings file, the backup (a copy of their settings as they are before quotameter touches the status line), and the `statusLine` entry before and after. If the user already has a status line command, it is kept and run first; quotameter's line is appended after it.
 
-   ```json
-   "statusLine": { "type": "command", "command": "node \"<absolute path to bin/quotameter.js>\" statusline --wrap \"<their existing command>\"" }
+2. Ask the user to confirm. Then run:
+
+   ```
+   node "<base>/../../bin/quotameter.js" setup
    ```
 
-   Escape quotes correctly for JSON. Use forward slashes in the path on Windows.
+   If the user asked to remove it, run `setup --remove` instead; it restores their previous status line command.
 
-   The wrapped command runs through a shell, the same way Claude Code runs any status line command. Only wrap the command that is already in the user's own settings; never add one from anywhere else.
-4. Run `node "<base>/../../bin/quotameter.js" doctor` and show the result.
-5. Tell the user the status line appears after the next response, and that `/quotameter:report` shows the full report.
+3. Run `node "<base>/../../bin/quotameter.js" doctor` and show the result.
+
+4. Tell the user the status line appears after the next response, that it records a reading every minute while Claude Code is open, and that `/quotameter:status` answers quick questions while `/quotameter:report` shows the full report.
+
+Do not edit `settings.json` yourself. The command does it, keeps a backup, and installs a launcher that survives plugin updates. If `node` is not found, tell the user to install Node 18 or newer (see the README's Requirements) and restart Claude Code.

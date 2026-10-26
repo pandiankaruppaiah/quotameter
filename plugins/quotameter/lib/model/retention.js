@@ -10,10 +10,11 @@
 // rewrite the raw files. loadData() skips anything state says is summarised,
 // so a crash between the steps cannot count a row twice. Call under withLock.
 
-import path from 'node:path';
 import { append, readAll, readState, writeState, rewrite } from '../store.js';
+import { folderName } from './breakdown.js';
 import { loadConfig } from '../config.js';
-import { loadData, prepare, roundMinute } from './analyze.js';
+import { loadData, roundMinute } from './load.js';
+import { prepare } from './analyze.js';
 import { hash } from '../ingest/logs.js';
 import { DAY, sum, tokensOf, round } from './util.js';
 
@@ -35,7 +36,7 @@ function dailyRows(msgs, cutoff, redact) {
   const days = new Map();
   for (const m of msgs) {
     const t = utcDay(m.t);
-    const project = !m.cwd ? 'unknown' : redact && !m.cwd.startsWith('project-') ? `project-${hash(m.cwd)}` : path.basename(m.cwd.replace(/[\\/]+$/, ''));
+    const project = !m.cwd ? 'unknown' : redact && !m.cwd.startsWith('project-') ? `project-${hash(m.cwd)}` : folderName(m.cwd);
     const agent = m.agent ? m.agent.type || m.agent.name || 'agent' : null;
     const key = [m.model || 'unknown', project, surfaceOf(m.entrypoint), agent || '', m.skill || ''].join('|');
     if (!days.has(t)) days.set(t, new Map());

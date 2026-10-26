@@ -4,6 +4,7 @@ import { loadConfig } from '../config.js';
 import { scanAll } from './logs.js';
 import { readDesktopHistory, readDesktopActivity } from './desktop.js';
 import { pollUsage, cleanupPollLogs } from './usage-poll.js';
+import { pollIsDue, notePollAttempt } from '../warn.js';
 
 export function newestReadingTs() {
   let last = 0;
@@ -23,12 +24,14 @@ export function newestReadingTs() {
 export async function ingest({ poll = 'auto', only } = {}) {
   const cfg = loadConfig();
   let pollResult = null;
-  const stale = Date.now() - newestReadingTs() > cfg.pollIntervalMin * 60000;
-  if (poll === true || (poll === 'auto' && stale)) {
+  // Stale means no reading and no attempt for pollIntervalMin, so a poll
+  // that keeps failing backs off instead of running on every prompt.
+  if (poll === true || (poll === 'auto' && pollIsDue(cfg, Date.now(), newestReadingTs()))) {
     // Several hooks can fire together; only one of them runs the poll.
     const release = tryLease('poll', 120000);
     if (release) {
       try {
+        notePollAttempt();
         pollResult = await pollUsage();
       } finally {
         release();
